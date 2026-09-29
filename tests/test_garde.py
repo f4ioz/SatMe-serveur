@@ -180,3 +180,37 @@ def test_diagnostic_proxy(store):
     assert "network_mode: host" in diagnostic(store, True, {"X-Forwarded-For": "172.18.0.1"})
     assert "arrive bien (88.1.2.3)" in diagnostic(store, True, {"X-Forwarded-For": "88.1.2.3",
                                                                "X-Forwarded-Proto": "https"})
+
+
+# ------------------------------------------------ through a real Waitress
+
+def servi_par_waitress(store, proxy, entetes):
+    """One request through Waitress itself (the test client skips it): the address the guard counted."""
+    import threading
+    import urllib.request
+    from waitress import create_server
+    from satme_gp.__main__ import options_waitress
+    garde = Garde(store, PaysFaux())
+    app = cree_app(store, fetch.Amont(store, Faux()), secret="t", derriere_proxy=proxy, garde=garde)
+    o = options_waitress(proxy)
+    o.pop("threads")
+    srv = create_server(app, host="127.0.0.1", port=0, threads=1, **{k: v for k, v in o.items() if k != "ident"})
+    t = threading.Thread(target=srv.run, daemon=True)
+    t.start()
+    try:
+        port = srv.effective_port
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/", headers=entetes)
+        urllib.request.urlopen(req, timeout=5).read()
+    finally:
+        srv.close()
+    garde.vide()
+    return [r["ip"] for r in store.connexions(1)]
+
+
+def test_derriere_un_proxy_l_adresse_du_visiteur_passe_waitress(store):
+    assert servi_par_waitress(store, True, {"X-Forwarded-For": "88.1.2.3",
+                                            "X-Forwarded-Proto": "https"}) == ["88.1.2.3"]
+
+
+def test_sans_proxy_un_faux_x_forwarded_for_est_ignore(store):
+    assert servi_par_waitress(store, False, {"X-Forwarded-For": "88.1.2.3"}) == ["127.0.0.1"]

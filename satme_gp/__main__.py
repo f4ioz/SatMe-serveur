@@ -36,6 +36,19 @@ def _env(nom: str, defaut: str) -> str:
     return os.environ.get(nom, defaut)
 
 
+def options_waitress(derriere_proxy: bool) -> dict:
+    """
+    Waitress 3 deletes X-Forwarded-For and the like by default, before the
+    application sees them: behind a proxy, every visitor then had the proxy's
+    address. Kept when a proxy is declared (the application reads them, one
+    hop only); deleted otherwise, where only a client faking them sends them.
+    """
+    return {"threads": 8, "ident": "satme-gp",
+            # A robot opening hundreds of connections gets queued, not the server exhausted.
+            "connection_limit": 200, "channel_timeout": 30,
+            "clear_untrusted_proxy_headers": not derriere_proxy}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="satme_gp", description="Serveur GP SatMe")
     sous = p.add_subparsers(dest="commande", required=True)
@@ -97,15 +110,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if not store.a_un_admin():
         logging.warning("Aucun compte d'administration : lancez « python -m satme_gp admin NOM ».")
+    proxy = _env("SATME_GP_PROXY", "0") == "1"
     app = cree_app(store, secret=secret_persistant(dossier),
-                   derriere_proxy=_env("SATME_GP_PROXY", "0") == "1",
+                   derriere_proxy=proxy,
                    https=_env("SATME_GP_HTTPS", "0") == "1")
     Planificateur(store, app.extensions["garde"].pays).start()
     hote, port = _env("SATME_GP_HOST", "127.0.0.1"), int(_env("SATME_GP_PORT", "8080"))
     logging.info("Serveur GP SatMe sur %s:%d, données dans %s", hote, port, os.path.abspath(dossier))
-    # A robot opening hundreds of connections gets queued, not the server exhausted.
-    serve(app, host=hote, port=port, threads=8, ident="satme-gp",
-          connection_limit=200, channel_timeout=30)
+    serve(app, host=hote, port=port, **options_waitress(proxy))
     return 0
 
 
