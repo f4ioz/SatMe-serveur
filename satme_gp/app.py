@@ -401,6 +401,32 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         session["vpn_test"] = vpn.teste(store, amont.telecharge)
         return redirect(url_for("admin"))
 
+    def diagnostic_proxy() -> dict:
+        """What this very request brought: is the visitor's address getting through?"""
+        orig = request.environ.get("werkzeug.proxy_fix.orig", {})
+        xff = request.headers.get("X-Forwarded-For", "")
+        derniere = xff.split(",")[-1].strip() if xff else ""
+        d = {"proxy": orig.get("REMOTE_ADDR") or request.environ.get("REMOTE_ADDR", "?"),
+             "vue": request.remote_addr or "?", "xff": xff or "—",
+             "xri": request.headers.get("X-Real-IP", "—"),
+             "xfp": request.headers.get("X-Forwarded-Proto", "—"), "actif": derriere_proxy}
+        if not derriere_proxy:
+            d["ok"], d["conclusion"] = False, (
+                "Le serveur n'écoute pas les en-têtes du proxy : mettez SATME_GP_PROXY=1 dans "
+                "/etc/satme-gp/env, puis systemctl restart satme-gp."
+                + (" Le proxy envoie bien X-Forwarded-For." if xff else ""))
+        elif not xff:
+            d["ok"], d["conclusion"] = False, (
+                "Le proxy n'envoie pas X-Forwarded-For : à ajouter dans sa configuration.")
+        elif privee(derniere):
+            d["ok"], d["conclusion"] = False, (
+                f"Le proxy transmet une adresse locale ({derniere}). Si vous êtes chez vous, c'est "
+                "normal : refaites l'essai depuis le téléphone en 4G. Sinon, le proxy ne voit pas "
+                "l'adresse réelle : NPMplus dans Docker doit être en « network_mode: host ».")
+        else:
+            d["ok"], d["conclusion"] = True, f"L'adresse du visiteur arrive bien ({derniere})."
+        return d
+
     @app.get("/admin/connexions")
     def admin_connexions():
         r = exige_admin()
@@ -410,6 +436,7 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         jours = int(jours) if jours in ("1", "7", "30") else 1
         jours = min(jours, store.reglage_int("connexions_jours"))
         return render_template("connexions.html", t=garde.tableau(jours), jours=jours,
+                               diag=diagnostic_proxy(),
                                bannis=garde.liste_bannis(), moi=client()[0],
                                base_pays=garde.pays.a_jour(), attribution=ATTRIBUTION,
                                derriere_proxy=derriere_proxy, version=__version__,

@@ -5,6 +5,7 @@
 and the connections page shows who comes."""
 
 import json
+import re
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -158,3 +159,24 @@ def test_numeros_inconnus_ne_bannissent_pas(client, store):
         client.get(f"/gp/catnr/{90000 + n}.json", environ_base=DEHORS, headers=SATME)
     client.get("/gp/stations.json", environ_base=DEHORS, headers=SATME)   # group off: 404
     assert client.garde.liste_bannis() == []
+
+
+def diagnostic(store, proxy, entetes, remote="192.168.1.2"):
+    store.pose_admin("f4ioz", generate_password_hash("un-bon-mot-de-passe"))
+    app = cree_app(store, fetch.Amont(store, Faux()), secret="t", derriere_proxy=proxy,
+                   garde=Garde(store, PaysFaux()))
+    c = app.test_client()
+    env = {"REMOTE_ADDR": remote}
+    j = re.search(r'name="csrf" value="([^"]+)"',
+                  c.get("/admin/connexion", environ_base=env, headers=entetes).get_data(as_text=True)).group(1)
+    c.post("/admin/connexion", data={"csrf": j, "nom": "f4ioz", "mot_de_passe": "un-bon-mot-de-passe"},
+           environ_base=env, headers=entetes)
+    return c.get("/admin/connexions", environ_base=env, headers=entetes).get_data(as_text=True)
+
+
+def test_diagnostic_proxy(store):
+    assert "SATME_GP_PROXY=1" in diagnostic(store, False, {"X-Forwarded-For": "88.1.2.3"})
+    assert "envoie pas X-Forwarded-For" in diagnostic(store, True, {})
+    assert "network_mode: host" in diagnostic(store, True, {"X-Forwarded-For": "172.18.0.1"})
+    assert "arrive bien (88.1.2.3)" in diagnostic(store, True, {"X-Forwarded-For": "88.1.2.3",
+                                                               "X-Forwarded-Proto": "https"})

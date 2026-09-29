@@ -29,6 +29,21 @@
 </div>
 
 <div class="carte">
+  <h2>Diagnostic du proxy (cette page)</h2>
+  <p class="{{ 'ok' if diag.ok else 'ko' }}">{{ diag.conclusion }}</p>
+  <div class="defile"><table>
+    <tr><td>Adresse qui se connecte au serveur (le proxy)</td><td><code>{{ diag.proxy }}</code></td></tr>
+    <tr><td>X-Forwarded-For reçu</td><td><code>{{ diag.xff }}</code></td></tr>
+    <tr><td>X-Real-IP reçu</td><td><code>{{ diag.xri }}</code></td></tr>
+    <tr><td>X-Forwarded-Proto reçu</td><td><code>{{ diag.xfp }}</code></td></tr>
+    <tr><td>Adresse retenue pour vous</td><td><code>{{ diag.vue }}</code></td></tr>
+    <tr><td>En-têtes du proxy pris en compte (SATME_GP_PROXY)</td><td>{{ 'oui' if diag.actif else 'non' }}</td></tr>
+  </table></div>
+  <p class="sub">Pour un essai fiable, ouvrez cette page depuis le téléphone en 4G : chez vous,
+     votre adresse est normalement locale.</p>
+</div>
+
+<div class="carte">
   <h2>Par pays</h2>
   <div class="defile"><table>
     <tr><th>Pays</th><th class="nombre">Adresses</th><th class="nombre">Requêtes</th><th class="nombre">SatMe</th><th class="nombre">Refusées</th></tr>
