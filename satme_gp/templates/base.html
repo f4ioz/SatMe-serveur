@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titre %}{{ nom or "Serveur GP SatMe" }}{% endblock %}</title>
+<style>
+  :root { --fond:#0B1016; --carte:#131C24; --bord:#22303B; --cyan:#3FE0C8;
+          --ambre:#FFB454; --rose:#E5484D; --gris:#9AA7B4; --clair:#E8F0F7; --vert:#49D17F; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fond); color:var(--clair);
+         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; font-size:15px; }
+  .page { max-width:1100px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 10px; }
+  .sub { color:var(--gris); font-size:13px; margin-bottom:18px; }
+  .carte { background:var(--carte); border:1px solid var(--bord); border-radius:12px;
+           padding:16px; margin-bottom:16px; overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; }
+  td, th { padding:7px 6px; border-bottom:1px solid var(--bord); text-align:left; font-size:14px; vertical-align:top; }
+  th { color:var(--gris); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.5px; }
+  code { color:var(--cyan); word-break:break-all; }
+  input, select, button { font:inherit; border-radius:8px; border:1px solid var(--bord);
+          background:#0E1720; color:var(--clair); padding:8px 10px; }
+  input:focus { outline:2px solid var(--cyan); }
+  button { cursor:pointer; font-weight:700; }
+  .primaire { background:var(--cyan); color:#06131A; border:none; }
+  .danger { color:var(--rose); }
+  .ok { color:var(--vert); } .ko { color:var(--rose); } .ambre { color:var(--ambre); }
+  .flash { background:rgba(255,180,84,.12); color:var(--ambre); padding:10px 12px;
+           border-radius:10px; margin-bottom:14px; }
+  .grille { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px; }
+  label { display:block; font-size:13px; color:var(--gris); margin-bottom:4px; }
+  .champ input { width:100%; }
+  .ligne { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+</style>
+</head>
+<body><div class="page">
+{% with messages = get_flashed_messages() %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+{% block corps %}{% endblock %}
+</div></body>
+</html>

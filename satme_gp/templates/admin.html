@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block titre %}Administration — {{ reglages.nom_public }}{% endblock %}
+{% block corps %}
+<div class="ligne" style="justify-content:space-between;margin-top:0">
+  <div><h1>{{ reglages.nom_public }}</h1><div class="sub">Administration · version {{ version }}</div></div>
+  <form method="post" action="{{ url_for('deconnexion') }}"><input type="hidden" name="csrf" value="{{ csrf() }}">
+    <button type="submit">Se déconnecter</button></form>
+</div>
+
+<div class="carte">
+  <div class="ligne" style="justify-content:space-between;margin-top:0">
+    <h2>Sources</h2>
+    <form method="post" action="{{ url_for('admin_rafraichir') }}"><input type="hidden" name="csrf" value="{{ csrf() }}">
+      <button type="submit">Tout récupérer maintenant</button></form>
+  </div>
+  <table>
+    <tr><th>Id</th><th>Nom</th><th>État</th><th>Satellites</th><th>Dernier succès</th><th>Dernier essai</th><th>Toutes les</th><th></th></tr>
+    {% for s in sources %}
+    <tr>
+      <td><code style="white-space:nowrap">{{ s.id }}</code></td><td>{{ s.nom }}<br><span class="sub">{{ s.url }}</span></td>
+      <td>{% if not s.actif %}<span class="sub">désactivée</span>
+          {% elif s.erreur %}<span class="ko">{{ s.erreur }}</span>
+          {% elif s.dernier_ok %}<span class="ok">ok</span>
+          {% else %}<span class="ambre">en attente</span>{% endif %}</td>
+      <td>{{ s.nombre }}</td><td>{{ s.dernier_ok | date }}</td><td>{{ s.dernier_essai | date }}</td>
+      <td>{{ intervalles[s.id] }} min</td>
+      <td style="white-space:nowrap">
+        <form method="post" action="{{ url_for('admin_bascule', sid=s.id) }}" style="display:inline">
+          <input type="hidden" name="csrf" value="{{ csrf() }}">
+          <button type="submit">{% if s.actif %}Désactiver{% else %}Activer{% endif %}</button></form>
+        <form method="post" action="{{ url_for('admin_supprime', sid=s.id) }}" style="display:inline"
+              onsubmit="return confirm('Supprimer la source {{ s.id }} ?')">
+          <input type="hidden" name="csrf" value="{{ csrf() }}">
+          <button class="danger" type="submit">Supprimer</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h2 style="margin-top:16px">Ajouter ou modifier une source</h2>
+  <p class="sub">Même identifiant qu'une source existante : elle est modifiée. Il devient l'adresse
+     <code>/gp/&lt;id&gt;.json</code> et <code>gp.php?GROUP=&lt;id&gt;</code>. CelesTrak : jamais moins de 120 min.</p>
+  <form method="post" action="{{ url_for('admin_source') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="grille">
+      <div class="champ"><label>Identifiant</label><input name="id" required pattern="[A-Za-z0-9_-]+"></div>
+      <div class="champ"><label>Nom affiché</label><input name="nom"></div>
+      <div class="champ" style="grid-column:span 2"><label>Adresse (OMM JSON, https)</label><input name="url" type="url" required></div>
+      <div class="champ"><label>Intervalle (min, vide = réglage général)</label><input name="intervalle_min" inputmode="numeric"></div>
+      <div class="champ"><label>Active</label><select name="actif"><option value="1">oui</option><option value="0">non</option></select></div>
+    </div>
+    <div class="ligne"><button class="primaire" type="submit">Enregistrer la source</button></div>
+  </form>
+</div>
+
+<div class="carte">
+  <h2>Réglages</h2>
+  <form method="post" action="{{ url_for('admin_reglages') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="grille">
+      <div class="champ"><label>Nom public</label><input name="nom_public" value="{{ reglages.nom_public }}"></div>
+      <div class="champ"><label>Intervalle général (min)</label><input name="intervalle_min" value="{{ reglages.intervalle_min }}"></div>
+      <div class="champ"><label>Requêtes par client</label><input name="limite_requetes" value="{{ reglages.limite_requetes }}"></div>
+      <div class="champ"><label>… par fenêtre de (s)</label><input name="fenetre_s" value="{{ reglages.fenetre_s }}"></div>
+      <div class="champ"><label>Recherche par numéro chez la source</label>
+        <select name="catnr_amont"><option value="1" {% if reglages.catnr_amont == '1' %}selected{% endif %}>oui</option>
+          <option value="0" {% if reglages.catnr_amont != '1' %}selected{% endif %}>non</option></select></div>
+      <div class="champ"><label>Garder une recherche (min)</label><input name="catnr_cache_min" value="{{ reglages.catnr_cache_min }}"></div>
+      <div class="champ"><label>Recherches par heure au plus</label><input name="catnr_max_heure" value="{{ reglages.catnr_max_heure }}"></div>
+      <div class="champ" style="grid-column:span 2"><label>Adresse de recherche ({n} = numéro)</label><input name="catnr_url" value="{{ reglages.catnr_url }}"></div>
+      <div class="champ" style="grid-column:span 2"><label>User-Agent envoyé aux sources</label><input name="user_agent" value="{{ reglages.user_agent }}"></div>
+    </div>
+    <div class="ligne"><button class="primaire" type="submit">Enregistrer les réglages</button></div>
+  </form>
+</div>
+
+<div class="carte">
+  <h2>Requêtes (7 derniers jours)</h2>
+  <table><tr><th>Jour</th><th>Type</th><th>Nombre</th></tr>
+    {% for r in stats %}<tr><td>{{ r['jour'] }}</td><td>{{ r['route'] }}</td><td>{{ r['n'] }}</td></tr>
+    {% else %}<tr><td colspan="3" class="sub">Aucune requête pour l'instant.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="carte">
+  <h2>Mot de passe</h2>
+  <form method="post" action="{{ url_for('admin_mot_de_passe') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="grille">
+      <div class="champ"><label>Actuel</label><input name="actuel" type="password" autocomplete="current-password" required></div>
+      <div class="champ"><label>Nouveau (10 caractères au moins)</label><input name="nouveau" type="password" autocomplete="new-password" required minlength="10"></div>
+      <div class="champ"><label>Confirmation</label><input name="confirmation" type="password" autocomplete="new-password" required></div>
+    </div>
+    <div class="ligne"><button type="submit">Changer le mot de passe</button></div>
+  </form>
+</div>
+{% endblock %}

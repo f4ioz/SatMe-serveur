@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block titre %}Connexion — administration{% endblock %}
+{% block corps %}
+<div style="max-width:380px;margin:10vh auto">
+<h1>Administration</h1>
+<div class="sub">Serveur GP SatMe</div>
+<form class="carte" method="post">
+  <input type="hidden" name="csrf" value="{{ csrf() }}">
+  <div class="champ"><label>Nom</label><input name="nom" autocomplete="username" autofocus required></div>
+  <div class="champ" style="margin-top:10px"><label>Mot de passe</label>
+    <input name="mot_de_passe" type="password" autocomplete="current-password" required></div>
+  <div class="ligne"><button class="primaire" type="submit">Entrer</button></div>
+</form>
+</div>
+{% endblock %}

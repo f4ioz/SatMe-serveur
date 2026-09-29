@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block corps %}
+<h1>{{ nom }}</h1>
+<div class="sub">Éléments orbitaux (GP, format OMM JSON) pour SatMe · version {{ version }}</div>
+<div class="carte">
+  <h2>Groupes</h2>
+  <table>
+    <tr><th>Groupe</th><th>Satellites</th><th>Mis à jour</th><th>Adresse</th></tr>
+    {% for s in sources %}
+    <tr><td>{{ s.nom }}</td><td>{{ s.nombre }}</td><td>{{ s.dernier_ok | date }}</td>
+        <td><code>{{ url_for('gp_groupe', sid=s.id, _external=True) }}</code></td></tr>
+    {% endfor %}
+  </table>
+</div>
+<div class="carte">
+  <h2>Adresses</h2>
+  <p>Mêmes formes que CelesTrak, format JSON seulement :</p>
+  <p><code>{{ url_for('gp_php', _external=True) }}?GROUP=amateur&amp;FORMAT=json</code><br>
+     <code>{{ url_for('gp_php', _external=True) }}?CATNR=25544&amp;FORMAT=json</code></p>
+  <p>Ou : <code>{{ url_for('gp_numero', n=25544, _external=True) }}</code> ·
+     liste des groupes : <code>{{ url_for('index_json', _external=True) }}</code></p>
+  <p class="sub">Sources : bulletin AMSAT et CelesTrak, récupérés au plus toutes les deux heures.
+     Merci de ne pas interroger ce serveur plus d'une fois par heure et par groupe.</p>
+</div>
+{% endblock %}
