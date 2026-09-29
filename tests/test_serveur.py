@@ -401,3 +401,9 @@ def test_commande_sources(tmp_path, monkeypatch, capsys):
     assert main(["sources", "--actives", "amsat,inconnue"]) == 1
     assert main(["sources", "--actives", "amsat,numero"]) == 0
     assert Store(tmp_path).reglage("catnr_amont") == "1"
+
+
+def test_index_en_https_derriere_un_proxy_qui_ne_le_dit_pas(store):
+    app = cree_app(store, fetch.Amont(store, Faux()), secret="t", derriere_proxy=True, https=True)
+    r = app.test_client().get("/gp/index.json", base_url="http://gp.exemple.org")
+    assert all(g["url"].startswith("https://gp.exemple.org/") for g in r.get_json()["groupes"])

@@ -13,6 +13,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -27,7 +28,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from . import __version__
 from . import vpn
 from .fetch import Amont, celestrak_en_pause, est_celestrak, intervalle_min
+from .garde import Garde
 from .limite import Limiteur
+from .pays import ATTRIBUTION, privee
 from .store import Store
 
 CACHE_S = 1800
@@ -36,7 +39,7 @@ FENETRE_CONNEXION_S = 900
 
 
 def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
-             derriere_proxy: bool = False, https: bool = False) -> Flask:
+             derriere_proxy: bool = False, https: bool = False, garde: Garde | None = None) -> Flask:
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY=secret,
@@ -52,9 +55,31 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         # client could claim any address.
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     amont = amont or Amont(store)
+    garde = garde or Garde(store)
+    app.extensions["garde"] = garde
     limiteur = Limiteur()
     essais = Limiteur()
     compresses: dict[tuple[str, float], bytes] = {}
+
+    # ------------------------------------------------------------- guard
+
+    def client() -> tuple[str, str]:
+        return request.remote_addr or "?", request.headers.get("User-Agent", "")
+
+    @app.before_request
+    def portier():
+        """Banned addresses, and non-SatMe clients when so set, go no further."""
+        ip, ua = client()
+        pourquoi = garde.refuse(ip, ua, request.path)
+        if pourquoi:
+            return Response(json.dumps({"erreur": pourquoi}), status=403, mimetype="application/json")
+        return None
+
+    @app.after_request
+    def compteur(r: Response):
+        ip, ua = client()
+        garde.note(ip, ua, request.path, r.status_code)
+        return r
 
     # ------------------------------------------------------------ public
 
@@ -155,7 +180,10 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
             "groupes": [{
                 "id": s.id, "nom": s.nom, "nombre": s.nombre,
                 "mise_a_jour": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(s.dernier_ok)) if s.dernier_ok else None,
-                "url": url_for("gp_groupe", sid=s.id, _external=True),
+                # Declared HTTPS: a proxy that does not pass X-Forwarded-Proto
+                # would otherwise make these http:// links.
+                "url": url_for("gp_groupe", sid=s.id, _external=True,
+                               **({"_scheme": "https"} if https else {})),
             } for s in store.sources() if s.actif],
         }
 
@@ -372,6 +400,68 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         verifie_csrf()
         session["vpn_test"] = vpn.teste(store, amont.telecharge)
         return redirect(url_for("admin"))
+
+    @app.get("/admin/connexions")
+    def admin_connexions():
+        r = exige_admin()
+        if r:
+            return r
+        jours = request.args.get("jours", "1")
+        jours = int(jours) if jours in ("1", "7", "30") else 1
+        jours = min(jours, store.reglage_int("connexions_jours"))
+        return render_template("connexions.html", t=garde.tableau(jours), jours=jours,
+                               bannis=garde.liste_bannis(), moi=client()[0],
+                               base_pays=garde.pays.a_jour(), attribution=ATTRIBUTION,
+                               derriere_proxy=derriere_proxy, version=__version__,
+                               reglages={k: store.reglage(k) for k in (
+                                   "nom_public", "ban_heures", "ban_refus", "ban_inconnus",
+                                   "satme_seul", "connexions_jours", "limite_requetes", "fenetre_s")})
+
+    @app.post("/admin/bannir")
+    def admin_bannir():
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        ip = request.form.get("ip", "").strip()
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            flash("Adresse invalide.")
+            return redirect(url_for("admin_connexions"))
+        if ip == client()[0]:
+            flash("C'est votre propre adresse : pas bannie.")
+        else:
+            heures = request.form.get("heures", "")
+            duree = int(heures) * 3600 if heures.isdigit() and int(heures) > 0 else None
+            garde.bannit(ip, "à la main", duree, auto=False)
+            flash(f"{ip} bannie.")
+        return redirect(url_for("admin_connexions", jours=request.form.get("jours", "1")))
+
+    @app.post("/admin/debannir")
+    def admin_debannir():
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        garde.debannit(request.form.get("ip", "").strip())
+        flash("Adresse débannie.")
+        return redirect(url_for("admin_connexions", jours=request.form.get("jours", "1")))
+
+    @app.post("/admin/garde")
+    def admin_garde():
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        for cle in ("ban_heures", "ban_refus", "ban_inconnus", "connexions_jours",
+                    "limite_requetes", "fenetre_s"):
+            v = request.form.get(cle, "").strip()
+            if v.isdigit() and int(v) > 0:
+                store.pose_reglage(cle, v)
+        store.pose_reglage("satme_seul", "1" if request.form.get("satme_seul") == "1" else "0")
+        flash("Garde-fou enregistré.")
+        return redirect(url_for("admin_connexions"))
 
     @app.post("/admin/reglages")
     def admin_reglages():

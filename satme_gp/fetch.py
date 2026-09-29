@@ -148,15 +148,20 @@ def tour(store: Store, telecharge: Telecharge = telecharge_http, maintenant: flo
 class Planificateur(threading.Thread):
     """Background loop: checks every half minute which source is due."""
 
-    def __init__(self, store: Store, periode_s: float = 30):
+    def __init__(self, store: Store, pays=None, periode_s: float = 30):
         super().__init__(name="satme-gp-fetch", daemon=True)
         self.store = store
+        self.pays = pays
         self.periode_s = periode_s
         self.arret = threading.Event()
 
     def run(self) -> None:
         while not self.arret.is_set():
             tour(self.store)
+            if self.pays is not None:
+                ligne = self.pays.mise_a_jour(telecharge_http, self.store.reglage("user_agent"))
+                if ligne:
+                    log.info("%s", ligne)
             self.arret.wait(self.periode_s)
 
 

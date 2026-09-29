@@ -50,6 +50,15 @@ REGLAGES_DEFAUT = {
     # Sent upstream: says who fetches, as CelesTrak asks.
     "user_agent": "SatMe-GP-server/1.0 (+https://github.com/f4ioz/SatMe)",
     "nom_public": "Serveur GP SatMe",
+    # Guard: a day's ban after 3 refusals for excess within an hour, or 30
+    # unknown pages within 10 min (a probe like /.env bans at once).
+    "ban_heures": "24",
+    "ban_refus": "3",
+    "ban_inconnus": "30",
+    # 1: the element files only for the SatMe app (by its User-Agent).
+    "satme_seul": "0",
+    # Client addresses are personal data: kept this many days.
+    "connexions_jours": "7",
 }
 
 
@@ -90,6 +99,12 @@ class Store:
                     PRIMARY KEY (jour, route));
                 CREATE TABLE IF NOT EXISTS catnr (norad INTEGER PRIMARY KEY, contenu TEXT NOT NULL,
                     quand REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS bannis (ip TEXT PRIMARY KEY, jusqua REAL NOT NULL,
+                    raison TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS connexions (jour TEXT, ip TEXT, pays TEXT NOT NULL,
+                    n INTEGER NOT NULL, bloques INTEGER NOT NULL, ua TEXT NOT NULL,
+                    satme TEXT NOT NULL, premier REAL NOT NULL, dernier REAL NOT NULL,
+                    PRIMARY KEY (jour, ip));
             """)
             for cle, valeur in REGLAGES_DEFAUT.items():
                 self._db.execute("INSERT OR IGNORE INTO reglages VALUES (?, ?)", (cle, valeur))
@@ -232,6 +247,45 @@ class Store:
         with self._verrou, self._db:
             self._db.execute("""INSERT INTO stats VALUES (?, ?, 1)
                                 ON CONFLICT(jour, route) DO UPDATE SET n = n + 1""", (jour, route))
+
+    # ---- guard ----
+
+    def bannis(self) -> dict[str, tuple[float, str]]:
+        with self._verrou:
+            rows = self._db.execute("SELECT ip, jusqua, raison FROM bannis").fetchall()
+        return {r["ip"]: (r["jusqua"], r["raison"]) for r in rows}
+
+    def bannit(self, ip: str, jusqua: float, raison: str) -> None:
+        with self._verrou, self._db:
+            self._db.execute("INSERT OR REPLACE INTO bannis VALUES (?, ?, ?)", (ip, jusqua, raison))
+
+    def debannit(self, ip: str) -> None:
+        with self._verrou, self._db:
+            self._db.execute("DELETE FROM bannis WHERE ip = ?", (ip,))
+
+    def note_connexions(self, lignes: list[tuple]) -> None:
+        """(day, ip, country, requests, blocked, user agent, SatMe version, first, last)."""
+        with self._verrou, self._db:
+            self._db.executemany("""
+                INSERT INTO connexions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(jour, ip) DO UPDATE SET pays = excluded.pays,
+                    n = n + excluded.n, bloques = bloques + excluded.bloques,
+                    ua = excluded.ua, satme = excluded.satme,
+                    premier = MIN(premier, excluded.premier), dernier = MAX(dernier, excluded.dernier)""",
+                                 lignes)
+
+    def oublie_connexions(self, jours: int) -> None:
+        with self._verrou, self._db:
+            self._db.execute("DELETE FROM connexions WHERE jour < date('now', ?)", (f"-{jours} day",))
+
+    def connexions(self, jours: int) -> list[sqlite3.Row]:
+        """Per address over the last [jours] days, busiest first; ua and version of the latest day."""
+        with self._verrou:
+            return self._db.execute("""
+                SELECT ip, pays, SUM(n) AS n, SUM(bloques) AS bloques, MIN(premier) AS premier,
+                       MAX(dernier) AS dernier, ua, satme
+                FROM connexions WHERE jour >= date('now', ?)
+                GROUP BY ip ORDER BY n DESC""", (f"-{jours - 1} day",)).fetchall()
 
     def statistiques(self, jours: int = 7) -> list[sqlite3.Row]:
         with self._verrou:

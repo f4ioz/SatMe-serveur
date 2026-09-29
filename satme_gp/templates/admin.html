@@ -3,8 +3,11 @@
 {% block corps %}
 <div class="ligne" style="justify-content:space-between;margin-top:0">
   <div><h1>{{ reglages.nom_public }}</h1><div class="sub">Administration · version {{ version }}</div></div>
-  <form method="post" action="{{ url_for('deconnexion') }}"><input type="hidden" name="csrf" value="{{ csrf() }}">
-    <button type="submit">Se déconnecter</button></form>
+  <div class="ligne" style="margin-top:0">
+    <a class="bouton" href="{{ url_for('admin_connexions') }}">Connexions et garde-fou</a>
+    <form method="post" action="{{ url_for('deconnexion') }}"><input type="hidden" name="csrf" value="{{ csrf() }}">
+      <button type="submit">Se déconnecter</button></form>
+  </div>
 </div>
 
 <div class="carte">

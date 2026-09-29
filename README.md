@@ -58,6 +58,30 @@ parmi toutes les sources actives.
 - **Côté clients** : `ETag`, `Last-Modified`, compression gzip, `Cache-Control`,
   et une limite de requêtes par adresse (120 par 10 min par défaut, réponse 429).
 
+## Garde-fou et connexions
+
+- **Bannissement automatique** (24 h par défaut) d'une adresse qui se fait
+  refuser 3 fois en une heure pour excès, qui demande 30 pages inexistantes en
+  10 minutes, ou qui cherche une seule fois une page de site connu pour ses
+  failles (`/.env`, `/wp-login.php`, `.git`…). Les réponses 404 des fichiers
+  d'éléments (groupe désactivé, numéro inconnu) ne comptent pas. Les adresses du
+  réseau local ne sont jamais bannies automatiquement : derrière un proxy qui ne
+  transmet pas `X-Forwarded-For`, tout le monde aurait l'adresse du proxy.
+- **Option « réservé à SatMe »** : les fichiers d'éléments seulement pour
+  l'application (reconnue à son `User-Agent`, `SatMe/20.73 (Android 14)`) ; elle
+  écarte les robots ordinaires, pas un imitateur.
+- **Waitress** : 200 connexions simultanées au plus, 30 s d'inactivité.
+- **Page « Connexions »** (`/admin/connexions`) : sur 24 h, 7 ou 30 jours,
+  requêtes, adresses, part de SatMe, refus ; par pays (drapeau, nom) ; par
+  adresse (pays, SatMe et sa version ou autre client, requêtes, refus, première
+  et dernière visite, bouton Bannir) ; adresses bannies (Débannir, bannir à la
+  main) ; réglages du garde-fou. Un avertissement s'affiche si toutes les
+  requêtes semblent venir du proxy.
+- **Pays** : base gratuite *IP to Country Lite* de DB-IP (CC BY 4.0), téléchargée
+  par le serveur au démarrage puis chaque mois.
+- **Données personnelles** : les adresses des clients sont gardées 7 jours par
+  défaut (réglable), puis effacées.
+
 ## Installation
 
 Debian 12, Ubuntu ou Raspberry Pi OS (Bookworm). Python 3 seulement, sans base
@@ -207,5 +231,6 @@ SATME_GP_DATA=data .venv/bin/python -m satme_gp serve      # http://127.0.0.1:80
 ## Licence
 
 GPL version 2 ou ultérieure, comme SatMe. Voir `LICENSE`.
+Localisation des adresses : [DB-IP](https://db-ip.com) (CC BY 4.0).
 Données : bulletin AMSAT, [CelesTrak](https://celestrak.org) (T.S. Kelso) et
 [SatNOGS DB](https://db.satnogs.org) (Libre Space Foundation, licence CC BY-SA 4.0).

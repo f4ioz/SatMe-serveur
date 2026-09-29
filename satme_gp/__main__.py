@@ -100,10 +100,12 @@ def main(argv: list[str] | None = None) -> int:
     app = cree_app(store, secret=secret_persistant(dossier),
                    derriere_proxy=_env("SATME_GP_PROXY", "0") == "1",
                    https=_env("SATME_GP_HTTPS", "0") == "1")
-    Planificateur(store).start()
+    Planificateur(store, app.extensions["garde"].pays).start()
     hote, port = _env("SATME_GP_HOST", "127.0.0.1"), int(_env("SATME_GP_PORT", "8080"))
     logging.info("Serveur GP SatMe sur %s:%d, données dans %s", hote, port, os.path.abspath(dossier))
-    serve(app, host=hote, port=port, threads=8, ident="satme-gp")
+    # A robot opening hundreds of connections gets queued, not the server exhausted.
+    serve(app, host=hote, port=port, threads=8, ident="satme-gp",
+          connection_limit=200, channel_timeout=30)
     return 0
 
 

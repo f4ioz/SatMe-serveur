@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block titre %}Connexions — {{ reglages.nom_public }}{% endblock %}
+{% block corps %}
+<div class="ligne" style="justify-content:space-between;margin-top:0">
+  <div><h1>Connexions</h1><div class="sub">{{ reglages.nom_public }} · version {{ version }}</div></div>
+  <a class="bouton" href="{{ url_for('admin') }}">← Administration</a>
+</div>
+
+<div class="carte">
+  <div class="ligne" style="margin-top:0">
+    {% for j, nom in ((1, "24 heures"), (7, "7 jours"), (30, "30 jours")) %}
+      {% if j <= reglages.connexions_jours|int %}
+      <a class="bouton {% if j == jours %}actif{% endif %}" href="{{ url_for('admin_connexions', jours=j) }}">{{ nom }}</a>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% if t.tous_prives and derriere_proxy %}
+  <p class="ko">Toutes les requêtes viennent d'une adresse du réseau local : le proxy ne transmet
+     sans doute pas l'adresse du visiteur (<code>X-Forwarded-For</code>). Sans elle, la limite par
+     adresse s'applique à tout le monde à la fois, et personne ne peut être banni.</p>
+  {% endif %}
+  <div class="chiffres" style="margin-top:12px">
+    <div><b>{{ t.total }}</b>requêtes</div>
+    <div><b>{{ t.nb_ips }}</b>adresses</div>
+    <div><b>{% if t.total %}{{ (100 * t.satme / t.total) | round | int }} %{% else %}—{% endif %}</b>venant de SatMe</div>
+    <div><b>{{ t.bloques }}</b>refusées</div>
+    <div><b>{{ bannis | length }}</b>bannies</div>
+  </div>
+</div>
+
+<div class="carte">
+  <h2>Par pays</h2>
+  <div class="defile"><table>
+    <tr><th>Pays</th><th class="nombre">Adresses</th><th class="nombre">Requêtes</th><th class="nombre">SatMe</th><th class="nombre">Refusées</th></tr>
+    {% for p in t.pays %}
+    <tr><td>{{ p.drapeau }} {{ p.nom }} <span class="sub">{{ p.code }}</span></td>
+        <td class="nombre">{{ p.ips }}</td><td class="nombre">{{ p.n }}</td>
+        <td class="nombre">{% if p.n %}{{ (100 * p.satme / p.n) | round | int }} %{% endif %}</td>
+        <td class="nombre">{{ p.bloques }}</td></tr>
+    {% else %}<tr><td colspan="5" class="sub">Aucune connexion sur la période.</td></tr>{% endfor %}
+  </table></div>
+  <p class="sub">{% if base_pays %}{{ attribution }}{% else %}Base des pays pas encore téléchargée
+     (elle l'est dans les minutes qui suivent le démarrage, puis chaque mois).{% endif %}</p>
+</div>
+
+<div class="carte">
+  <h2>Par adresse</h2>
+  <div class="defile"><table>
+    <tr><th>Adresse</th><th>Pays</th><th>Client</th><th class="nombre">Requêtes</th><th class="nombre">Refusées</th><th>Première</th><th>Dernière</th><th></th></tr>
+    {% for r in t.ips %}
+    <tr>
+      <td><code>{{ r.ip }}</code>{% if r.ip == moi %} <span class="sub">(vous)</span>{% endif %}</td>
+      <td style="white-space:nowrap">{{ r.drapeau }} {{ r.pays }}</td>
+      <td>{% if r.satme %}<span class="ok">SatMe {{ r.satme }}</span>
+          {% else %}<span class="ambre">autre</span> <span class="sub">{{ r.ua[:70] or "sans User-Agent" }}</span>{% endif %}</td>
+      <td class="nombre">{{ r.n }}</td><td class="nombre">{% if r.bloques %}<span class="ko">{{ r.bloques }}</span>{% else %}0{% endif %}</td>
+      <td style="white-space:nowrap">{{ r.premier | date }}</td><td style="white-space:nowrap">{{ r.dernier | date }}</td>
+      <td>{% if r.ip != moi %}
+        <form method="post" action="{{ url_for('admin_bannir') }}" style="display:inline"
+              onsubmit="return confirm('Bannir {{ r.ip }} ?')">
+          <input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="ip" value="{{ r.ip }}">
+          <input type="hidden" name="jours" value="{{ jours }}">
+          <button class="danger" type="submit">Bannir</button></form>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="8" class="sub">Aucune connexion sur la période.</td></tr>{% endfor %}
+  </table></div>
+  {% if t.ips | length >= 300 %}<p class="sub">Les 300 adresses les plus actives.</p>{% endif %}
+</div>
+
+<div class="carte">
+  <h2>Adresses bannies</h2>
+  <div class="defile"><table>
+    <tr><th>Adresse</th><th>Jusqu'au</th><th>Raison</th><th></th></tr>
+    {% for ip, jusqua, raison in bannis %}
+    <tr><td><code>{{ ip }}</code></td><td>{{ jusqua | date }}</td><td>{{ raison }}</td>
+      <td><form method="post" action="{{ url_for('admin_debannir') }}">
+        <input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="ip" value="{{ ip }}">
+        <input type="hidden" name="jours" value="{{ jours }}">
+        <button type="submit">Débannir</button></form></td></tr>
+    {% else %}<tr><td colspan="4" class="sub">Aucune.</td></tr>{% endfor %}
+  </table></div>
+  <form method="post" action="{{ url_for('admin_bannir') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="jours" value="{{ jours }}">
+    <div class="grille" style="margin-top:10px">
+      <div class="champ"><label>Bannir une adresse</label><input name="ip" placeholder="203.0.113.7" required></div>
+      <div class="champ"><label>Pendant (heures, vide = réglage)</label><input name="heures" inputmode="numeric"></div>
+    </div>
+    <div class="ligne"><button class="danger" type="submit">Bannir</button></div>
+  </form>
+</div>
+
+<div class="carte">
+  <h2>Garde-fou</h2>
+  <p class="sub">Une adresse qui dépasse la limite plusieurs fois, ou qui cherche des pages de sites
+     connus pour leurs failles (<code>/.env</code>, <code>/wp-login.php</code>…), est bannie.
+     Les adresses du réseau local ne le sont jamais automatiquement.</p>
+  <form method="post" action="{{ url_for('admin_garde') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="grille">
+      <div class="champ"><label>Requêtes par adresse</label><input name="limite_requetes" value="{{ reglages.limite_requetes }}"></div>
+      <div class="champ"><label>… par fenêtre de (s)</label><input name="fenetre_s" value="{{ reglages.fenetre_s }}"></div>
+      <div class="champ"><label>Bannir après ce nombre de refus en une heure</label><input name="ban_refus" value="{{ reglages.ban_refus }}"></div>
+      <div class="champ"><label>… ou de pages inexistantes en 10 min</label><input name="ban_inconnus" value="{{ reglages.ban_inconnus }}"></div>
+      <div class="champ"><label>Durée d'un bannissement (heures)</label><input name="ban_heures" value="{{ reglages.ban_heures }}"></div>
+      <div class="champ"><label>Garder les connexions (jours)</label><input name="connexions_jours" value="{{ reglages.connexions_jours }}"></div>
+      <div class="champ"><label>Fichiers réservés à SatMe</label>
+        <select name="satme_seul">
+          <option value="0" {% if reglages.satme_seul != '1' %}selected{% endif %}>non, pour tous</option>
+          <option value="1" {% if reglages.satme_seul == '1' %}selected{% endif %}>oui, SatMe seulement</option>
+        </select></div>
+    </div>
+    <p class="sub">« SatMe seulement » s'appuie sur l'en-tête User-Agent : il écarte les robots
+       ordinaires, pas quelqu'un qui imite SatMe.</p>
+    <div class="ligne"><button class="primaire" type="submit">Enregistrer</button></div>
+  </form>
+</div>
+{% endblock %}

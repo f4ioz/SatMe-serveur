@@ -23,6 +23,14 @@
           background:#0E1720; color:var(--clair); padding:8px 10px; }
   input:focus, textarea:focus { outline:2px solid var(--cyan); }
   button { cursor:pointer; font-weight:700; }
+  a.bouton { display:inline-block; border:1px solid var(--bord); border-radius:8px; padding:8px 10px;
+             color:var(--clair); text-decoration:none; font-weight:700; background:#0E1720; }
+  a.bouton.actif { background:var(--cyan); color:#06131A; border-color:var(--cyan); }
+  .chiffres { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px; }
+  .chiffres div { background:#0E1720; border-radius:10px; padding:10px 12px; }
+  .chiffres b { display:block; font-size:22px; color:var(--clair); }
+  .defile { overflow-x:auto; }
+  td.nombre, th.nombre { text-align:right; font-variant-numeric:tabular-nums; }
   .primaire { background:var(--cyan); color:#06131A; border:none; }
   .danger { color:var(--rose); }
   .ok { color:var(--vert); } .ko { color:var(--rose); } .ambre { color:var(--ambre); }
