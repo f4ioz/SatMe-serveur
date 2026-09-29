@@ -13,7 +13,9 @@ request in its data folder, a systemd path unit calls "applique", and this
 script checks the request strictly before acting.
 
   satme-gp-vpn cle FICHIER.conf   import a WireGuard file made on mullvad.net
-  satme-gp-vpn sortie HOTE        tunnel through this exit (e.g. fr-par-wg-001)
+  satme-gp-vpn sortie HOTE        tunnel through this exit: a relay (fr-par-wg-001),
+                                  a city (fr-par) or a country (fr), picked at random
+  satme-gp-vpn liste              Mullvad's countries and cities
   satme-gp-vpn arret              no tunnel
   satme-gp-vpn etat               what is in place
   satme-gp-vpn oublie             tunnel removed and key deleted
@@ -30,6 +32,7 @@ import ipaddress
 import json
 import os
 import pwd
+import random
 import re
 import shutil
 import stat
@@ -71,7 +74,7 @@ RELAIS_URL = os.environ.get("SATME_GP_VPN_RELAIS_URL",
                             "https://api.mullvad.net/public/relays/wireguard/v2/")
 
 CLE_WG = re.compile(r"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=")
-HOTE = re.compile(r"[a-z0-9-]{3,40}")
+HOTE = re.compile(r"[a-z0-9-]{2,40}")
 JETON = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
 
@@ -183,7 +186,8 @@ def relais() -> list[dict]:
     sortie = []
     for x in d.get("wireguard", {}).get("relays", []):
         lieu = lieux.get(x.get("location"), {})
-        sortie.append({"hostname": x.get("hostname"), "public_key": x.get("public_key"),
+        sortie.append({"hostname": x.get("hostname"), "lieu": x.get("location", ""),
+                       "public_key": x.get("public_key"),
                        "ipv4": x.get("ipv4_addr_in"), "actif": bool(x.get("active")),
                        "pays": lieu.get("country", ""), "ville": lieu.get("city", "")})
     return sortie
@@ -193,7 +197,14 @@ def trouve(hote: str) -> dict:
     if not HOTE.fullmatch(hote):
         raise Refus("nom de sortie invalide")
     try:
-        r = next((x for x in relais() if x["hostname"] == hote), None)
+        tous = relais()
+        r = next((x for x in tous if x["hostname"] == hote), None)
+        if r is None:
+            # A city ("fr-par") or a country ("fr"): any relay in service there.
+            ici = [x for x in tous if x["actif"] and CLE_WG.fullmatch(x["public_key"] or "")
+                   and (x.get("lieu") == hote or x.get("lieu", "").startswith(hote + "-"))]
+            if ici:
+                r = random.choice(ici)
     except (OSError, ValueError) as e:
         # List out of reach (already inside a broken tunnel?): the last choice, if the same.
         ancien = lit_json(CHOIX)
@@ -212,6 +223,7 @@ def trouve(hote: str) -> dict:
 
 def choisit(hote: str) -> dict:
     r = trouve(hote)
+    hote = r["hostname"]
     choix = {k: r[k] for k in ("hostname", "public_key", "ipv4", "pays", "ville")}
     try:
         monte(choix)
@@ -330,6 +342,14 @@ def main(argv: list[str]) -> int:
             case ["sortie", hote]:
                 c = choisit(hote)
                 print(f"Tunnel par {c['hostname']} ({c['ville']}, {c['pays']}).")
+            case ["liste"]:
+                villes: dict[str, dict[str, list[str]]] = {}
+                for x in relais():
+                    if x["actif"]:
+                        pays = villes.setdefault(x["lieu"].split("-")[0] + "  " + x["pays"], {})
+                        pays.setdefault(f"{x['ville']} ({x['lieu']})", []).append(x["hostname"])
+                for pays in sorted(villes):
+                    print(pays + " : " + ", ".join(f"{v} ×{len(h)}" for v, h in sorted(villes[pays].items())))
             case ["arret"]:
                 arrete()
                 print("Plus de tunnel : connexion directe.")

@@ -12,8 +12,11 @@
 #        --email moi@exemple.org --admin f4ioz
 #   sudo ./deploy/install.sh --mode proxy --ecoute 0.0.0.0 --port 8080 --admin f4ioz
 #   sudo ./deploy/install.sh --mise-a-jour    new code, same settings and data
-#   add --vpn-mullvad FICHIER.conf to send the server's own requests through
-#   Mullvad (WireGuard file generated on mullvad.net; exit chosen in /admin)
+#   sudo ./deploy/install.sh --mode proxy --domaine gp.exemple.org --https ...
+#        (HTTPS done by the proxy in front: secure admin cookie)
+#   add --vpn-mullvad FICHIER.conf [--vpn-sortie fr] to send the server's own
+#   requests through Mullvad (WireGuard file generated on mullvad.net; exit:
+#   country, city or relay, changeable later in /admin)
 #
 # Run again at will: data (/var/lib/satme-gp) and settings (/etc/satme-gp)
 # are kept; only the code is replaced.
@@ -29,9 +32,9 @@ ENVFILE=$CONFIG/env
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 MODE=""; DOMAINE=""; EMAIL=""; ECOUTE=""; PORT=""; ADMIN=""; MDP_STDIN=0
-MISE_A_JOUR=0; NON_INTERACTIF=0; VPN_CONF=""
+MISE_A_JOUR=0; NON_INTERACTIF=0; VPN_CONF=""; VPN_SORTIE=""; HTTPS_PROXY=0
 
-aide() { sed -n '6,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+aide() { sed -n '6,24p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 dit()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 nie()  { printf '\033[1;31mErreur :\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -47,6 +50,8 @@ while [ $# -gt 0 ]; do
     --mise-a-jour) MISE_A_JOUR=1; shift;;
     --non-interactif) NON_INTERACTIF=1; shift;;
     --vpn-mullvad) VPN_CONF="$2"; shift 2;;
+    --vpn-sortie) VPN_SORTIE="$2"; shift 2;;
+    --https) HTTPS_PROXY=1; shift;;
     -h|--help) aide 0;;
     *) echo "Option inconnue : $1" >&2; aide 1;;
   esac
@@ -122,7 +127,7 @@ fi
 # --------------------------------------------------------------- settings
 if [ "$MISE_A_JOUR" -eq 0 ]; then
   dit "Réglages dans $ENVFILE"
-  PROXY=1; HTTPS=0
+  PROXY=1; HTTPS=$HTTPS_PROXY
   [ "$MODE" = caddy ] && HTTPS=1
   # A plain port reached directly (no proxy in front) must not trust
   # X-Forwarded-For: any client could claim any address.
@@ -144,7 +149,7 @@ EOF
   )
   chown root:"$UTILISATEUR" "$ENVFILE"; chmod 640 "$ENVFILE"
   echo "MODE=$MODE" > "$CONFIG/installation"
-  [ -n "$DOMAINE" ] && echo "DOMAINE=$DOMAINE" >> "$CONFIG/installation"
+  if [ -n "$DOMAINE" ]; then echo "DOMAINE=$DOMAINE" >> "$CONFIG/installation"; fi
 fi
 
 # ---------------------------------------------------------------- service
@@ -220,6 +225,13 @@ systemctl start $APP-vpn-demande.path
 if [ -n "$VPN_CONF" ]; then
   dit "Clé Mullvad"
   /usr/local/sbin/satme-gp-vpn cle "$VPN_CONF"
+  demande VPN_SORTIE "Sortie Mullvad (pays fr, ville fr-par ou relais fr-par-wg-001)" "fr"
+fi
+if [ -n "$VPN_SORTIE" ]; then
+  # Before the service's first start: its first round must already go through
+  # the tunnel, not straight from this machine's address.
+  dit "Tunnel Mullvad"
+  /usr/local/sbin/satme-gp-vpn sortie "$VPN_SORTIE" || nie "tunnel impossible : service laissé arrêté (satme-gp-vpn sortie AUTRE, puis systemctl start $APP)."
 fi
 
 # ------------------------------------------------------------------ admin
@@ -289,6 +301,7 @@ if [ "${MODE:-}" = caddy ]; then
   echo "  (le certificat est obtenu à la première visite ; le domaine doit déjà pointer ici)"
 else
   echo "  Le serveur écoute sur http://${SATME_GP_HOST}:${SATME_GP_PORT}/"
+  [ -n "${DOMAINE:-}" ] && echo "  Adresse publique : https://${DOMAINE}/  (à déclarer dans le proxy)"
   echo "  À déclarer dans votre proxy, par exemple Nginx :"
   echo "      location / { proxy_pass http://ADRESSE_DE_CETTE_MACHINE:${SATME_GP_PORT};"
   echo "                   proxy_set_header Host \$host;"

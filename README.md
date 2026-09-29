@@ -81,8 +81,11 @@ Sans questions :
 
 ```sh
 sudo ./deploy/install.sh --mode caddy --domaine gp.exemple.org --email moi@exemple.org --admin f4ioz
-sudo ./deploy/install.sh --mode proxy --ecoute 0.0.0.0 --port 8080 --admin f4ioz
+sudo ./deploy/install.sh --mode proxy --ecoute 0.0.0.0 --port 8080 --domaine gp.exemple.org --https --admin f4ioz
 ```
+
+`--https` : le proxy placé devant sert le domaine en HTTPS (cookie
+d'administration réservé à HTTPS).
 
 Ce que fait le script : utilisateur système `satme-gp`, code dans
 `/opt/satme-gp`, données dans `/var/lib/satme-gp`, réglages dans
@@ -91,20 +94,29 @@ lecture seule sauf ses données), compte d'administration.
 
 ### Proxmox VE
 
-À lancer **sur l'hôte Proxmox**, en root : crée un conteneur Debian 12 non
-privilégié, y copie le serveur et l'installe.
+À lancer **sur l'hôte Proxmox**, en root. Le script pose toutes les questions,
+avec une valeur proposée à chaque fois, montre un récapitulatif, puis crée un
+conteneur Debian 12 non privilégié (premier numéro libre), y installe le
+serveur et donne ce qu'il faut déclarer dans votre proxy. Sans rien cloner :
 
 ```sh
-git clone https://github.com/f4ioz/SatMe-serveur.git
-cd SatMe-serveur
-./deploy/proxmox-lxc.sh
-# ou sans questions :
-./deploy/proxmox-lxc.sh --ip 192.168.1.50/24 --passerelle 192.168.1.1 --mode proxy --admin f4ioz
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/f4ioz/SatMe-serveur/main/deploy/proxmox-lxc.sh)"
 ```
 
-Options : `--ctid`, `--nom`, `--stockage` (local-lvm), `--stockage-modeles`
-(local), `--pont` (vmbr0), `--ip dhcp|ADRESSE/MASQUE`, `--passerelle`,
-`--memoire` (512 Mo), `--disque` (4 Go), `--coeurs` (1), `--cle-ssh FICHIER.pub`.
+Questions : numéro (premier libre), nom, stockages (ceux de l'hôte sont
+listés), disque, mémoire, cœurs, pont, adresse IP (fixe conseillée) et
+passerelle, clés SSH ; accès (Caddy dans le conteneur, ou derrière votre proxy
+avec le nom de domaine et HTTPS) ; compte d'administration ; VPN Mullvad
+(fichier `.conf` sur l'hôte, sortie : pays, ville ou relais).
+
+`--essai` montre ce qui serait fait sans rien toucher. Chaque réponse peut aussi
+être donnée en option (`--ctid`, `--ip`, `--mode`, `--domaine`, `--vpn-mullvad`…,
+voir `--help`). Mise à jour d'un conteneur existant :
+
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/f4ioz/SatMe-serveur/main/deploy/proxmox-lxc.sh)" _ --mise-a-jour --ctid 120
+```
+
 Le mot de passe d'administration est demandé sur l'hôte ; celui de root du
 conteneur est tiré au hasard et affiché à la fin.
 
@@ -119,8 +131,11 @@ machine ne sont pas touchés.
 1. Sur mullvad.net : Compte → Configuration WireGuard → Linux, générer une clé,
    télécharger un fichier (n'importe quelle sortie : seules la clé et l'adresse
    servent). Chaque clé compte comme un appareil Mullvad.
-2. Sur la machine : `sudo satme-gp-vpn cle mullvad.conf` (ou `--vpn-mullvad
-   mullvad.conf` à l'installation, avec `install.sh` ou `proxmox-lxc.sh`).
+2. Sur la machine : `sudo satme-gp-vpn cle mullvad.conf` puis
+   `sudo satme-gp-vpn sortie fr` (pays, ville `fr-par` ou relais
+   `fr-par-wg-001` ; `satme-gp-vpn liste` montre pays et villes). À
+   l'installation : `--vpn-mullvad mullvad.conf --vpn-sortie fr` ; le tunnel est
+   alors monté avant la première récupération.
 3. Dans `/admin`, carte « VPN Mullvad » : les sorties en service, par pays et
    ville ; « Utiliser cette sortie », « Couper le tunnel », et « Tester », qui
    demande à Mullvad l'adresse vue d'Internet.

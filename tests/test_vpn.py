@@ -181,3 +181,20 @@ def test_cle_importee_depuis_un_fichier_mullvad(h, tmp_path, monkeypatch):
     conf.write_text("[Interface]\nPrivateKey = court\nAddress = 10.0.0.1/32\n")
     with pytest.raises(h.Refus):
         h.importe_cle(str(conf))
+
+
+def test_sortie_par_ville_ou_pays(h, monkeypatch):
+    cle = RELAIS["wireguard"]["relays"][0]["public_key"]
+    monkeypatch.setattr(h, "relais", lambda: [
+        {"hostname": "fr-par-wg-001", "lieu": "fr-par", "public_key": cle, "ipv4": "1.2.3.4",
+         "actif": True, "pays": "France", "ville": "Paris"},
+        {"hostname": "fr-mrs-wg-001", "lieu": "fr-mrs", "public_key": cle, "ipv4": "1.2.3.5",
+         "actif": False, "pays": "France", "ville": "Marseille"},
+        {"hostname": "se-got-wg-001", "lieu": "se-got", "public_key": cle, "ipv4": "1.2.3.6",
+         "actif": True, "pays": "Sweden", "ville": "Gothenburg"}])
+    assert h.trouve("fr")["hostname"] == "fr-par-wg-001"      # the one in service
+    assert h.trouve("fr-par")["hostname"] == "fr-par-wg-001"
+    assert h.trouve("se")["hostname"] == "se-got-wg-001"
+    for x in ("fr-mrs", "f", "de"):
+        with pytest.raises(h.Refus):
+            h.trouve(x)
