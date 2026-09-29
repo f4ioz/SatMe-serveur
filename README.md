@@ -23,8 +23,23 @@ Mêmes adresses que CelesTrak, format JSON seulement :
 | `/sante` | 200 si tous les groupes actifs ont moins d'un jour, 503 sinon |
 | `/admin` | administration |
 
-Groupes par défaut, ceux de SatMe : `amsat` (bulletin AMSAT), `amateur`,
-`stations`, `visual`, `weather`, `cubesat` (CelesTrak).
+Groupes par défaut :
+
+- ceux de SatMe : `amsat` (bulletin AMSAT), `amateur`, `stations`, `visual`,
+  `weather`, `cubesat` (CelesTrak) ;
+- `satnogs` : tous les satellites suivis par [SatNOGS DB](https://db.satnogs.org)
+  (environ 1 700), avec la source de TLE que SatNOGS retient pour chacun ;
+- `supgp_iss` : éléments supplémentaires (SupGP) de CelesTrak pour l'ISS,
+  calculés à partir des éphémérides de l'opérateur, souvent plus justes que le
+  GP public.
+
+La recherche par numéro prend, pour chaque satellite, l'élément le plus récent
+parmi toutes les sources actives.
+
+- **Trois formats de source**, reconnus seuls : OMM JSON (CelesTrak, SupGP,
+  AMSAT), JSON TLE de SatNOGS DB, et TLE texte (avec ou sans ligne de nom). Les
+  TLE sont convertis en OMM (somme de contrôle vérifiée, numéros Alpha-5
+  compris) : SatMe reçoit toujours le même format.
 
 - **Fichiers vérifiés** : un fichier qui n'est pas une liste OMM valable (page
   d'erreur HTML, liste vide, plus de 10 % d'éléments invalides) ne remplace pas
@@ -32,8 +47,14 @@ Groupes par défaut, ceux de SatMe : `amsat` (bulletin AMSAT), `amateur`,
 - **Récupération polie** : `User-Agent` explicite, `If-None-Match` /
   `If-Modified-Since` (un groupe inchangé coûte une réponse 304), jamais deux fois
   un groupe CelesTrak en deux heures, même après un échec.
+- **Pause après un refus** : si CelesTrak répond 403 ou 429, plus aucune requête
+  chez lui pendant 6 h (ou la durée de son `Retry-After`), groupes et numéros
+  compris ; l'administration l'affiche. Les requêtes d'un même tour sont espacées
+  de 3 s. Le bouton « Récupérer maintenant » ne force jamais CelesTrak.
 - **Satellite hors groupes** : cherché chez CelesTrak par numéro, gardé en cache
-  (6 h par défaut), plafonné à 60 recherches par heure pour tous les clients.
+  (6 h par défaut, jamais moins de 2 h), plafonné à 20 recherches par heure pour
+  tous les clients. Un numéro hors des numéros possibles (au-delà du plus grand
+  connu + 5 000, ou d'Alpha-5) n'est pas demandé.
 - **Côté clients** : `ETag`, `Last-Modified`, compression gzip, `Cache-Control`,
   et une limite de requêtes par adresse (120 par 10 min par défaut, réponse 429).
 
@@ -87,16 +108,44 @@ Options : `--ctid`, `--nom`, `--stockage` (local-lvm), `--stockage-modeles`
 Le mot de passe d'administration est demandé sur l'hôte ; celui de root du
 conteneur est tiré au hasard et affiché à la fin.
 
+### VPN Mullvad (optionnel)
+
+Les requêtes du serveur vers les sources peuvent passer, le temps qu'il faut,
+par un tunnel WireGuard Mullvad. Seules ces requêtes y passent : les visiteurs
+arrivent toujours par le nom de domaine (Caddy, proxy ou port redirigé), leurs
+réponses repartent par la connexion normale, et SSH comme le reste de la
+machine ne sont pas touchés.
+
+1. Sur mullvad.net : Compte → Configuration WireGuard → Linux, générer une clé,
+   télécharger un fichier (n'importe quelle sortie : seules la clé et l'adresse
+   servent). Chaque clé compte comme un appareil Mullvad.
+2. Sur la machine : `sudo satme-gp-vpn cle mullvad.conf` (ou `--vpn-mullvad
+   mullvad.conf` à l'installation, avec `install.sh` ou `proxmox-lxc.sh`).
+3. Dans `/admin`, carte « VPN Mullvad » : les sorties en service, par pays et
+   ville ; « Utiliser cette sortie », « Couper le tunnel », et « Tester », qui
+   demande à Mullvad l'adresse vue d'Internet.
+
+Tant qu'un tunnel est choisi, rien ne sort en direct : si le tunnel tombe, les
+requêtes échouent au lieu de partir par la connexion normale. Le choix est
+remis au démarrage. En ligne de commande : `satme-gp-vpn sortie HOTE`,
+`arret`, `etat`, `oublie` (retire le tunnel et efface la clé).
+
+Changer de sortie ne lève pas la pause CelesTrak. Quand le tunnel n'est plus
+utile : « Couper le tunnel », puis `sudo satme-gp-vpn oublie` pour effacer la
+clé (et la retirer des appareils sur mullvad.net). Sous Proxmox, le
+module `wireguard` doit être chargé sur l'hôte (`proxmox-lxc.sh` s'en charge).
+
 ## Administration
 
 `https://votre-domaine/admin` :
 
 - **Sources** : état (ok, erreur, en attente), nombre de satellites, dernier
-  succès, intervalle ; ajouter une source (identifiant, adresse OMM JSON en
-  https), l'activer ou la désactiver, la supprimer ; tout récupérer maintenant.
+  succès, intervalle ; ajouter une source (identifiant, adresse https en OMM
+  JSON, JSON SatNOGS ou TLE texte), l'activer ou la désactiver, la supprimer ; tout récupérer maintenant.
 - **Réglages** : nom public, intervalle général, limite de requêtes par client,
   recherche par numéro chez la source (oui/non, durée de cache, plafond horaire,
   adresse), `User-Agent` envoyé aux sources.
+- **VPN Mullvad**, s'il est configuré (voir plus haut).
 - **Requêtes** des sept derniers jours.
 - **Mot de passe** (10 caractères au moins).
 
@@ -134,4 +183,5 @@ SATME_GP_DATA=data .venv/bin/python -m satme_gp serve      # http://127.0.0.1:80
 ## Licence
 
 GPL version 2 ou ultérieure, comme SatMe. Voir `LICENSE`.
-Données : bulletin AMSAT et [CelesTrak](https://celestrak.org) (T.S. Kelso).
+Données : bulletin AMSAT, [CelesTrak](https://celestrak.org) (T.S. Kelso) et
+[SatNOGS DB](https://db.satnogs.org) (Libre Space Foundation, licence CC BY-SA 4.0).

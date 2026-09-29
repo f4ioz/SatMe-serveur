@@ -16,14 +16,14 @@
 #   --stockage-modeles local, --pont vmbr0, --ip dhcp|ADRESSE/MASQUE,
 #   --passerelle IP, --memoire 512, --disque 4, --coeurs 1, --cle-ssh FICHIER.pub
 # Server options, passed to install.sh: --mode caddy|proxy, --domaine, --email,
-#   --port 8080, --admin NOM.
+#   --port 8080, --admin NOM, --vpn-mullvad FICHIER.conf.
 
 set -euo pipefail
 
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTID=""; NOM=satme-gp; STOCKAGE=local-lvm; MODELES=local; PONT=vmbr0; IP=dhcp; GW=""
 MEMOIRE=512; DISQUE=4; COEURS=1; CLE_SSH=""
-MODE=""; DOMAINE=""; EMAIL=""; PORT=8080; ADMIN=""; MISE_A_JOUR=0
+MODE=""; DOMAINE=""; EMAIL=""; PORT=8080; ADMIN=""; MISE_A_JOUR=0; VPN_CONF=""
 
 aide() { sed -n '6,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 dit()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -47,6 +47,7 @@ while [ $# -gt 0 ]; do
     --email) EMAIL="$2"; shift 2;;
     --port) PORT="$2"; shift 2;;
     --admin) ADMIN="$2"; shift 2;;
+    --vpn-mullvad) VPN_CONF="$2"; shift 2;;
     --mise-a-jour) MISE_A_JOUR=1; shift;;
     -h|--help) aide 0;;
     *) echo "Option inconnue : $1" >&2; aide 1;;
@@ -55,6 +56,7 @@ done
 
 [ "$(id -u)" -eq 0 ] || nie "à lancer en root sur l'hôte Proxmox."
 command -v pct >/dev/null && command -v pveam >/dev/null || nie "pct et pveam introuvables : ce n'est pas un hôte Proxmox VE."
+[ -z "$VPN_CONF" ] || [ -f "$VPN_CONF" ] || nie "fichier WireGuard introuvable : $VPN_CONF"
 
 pousse_code() {
   local archive
@@ -136,11 +138,18 @@ pousse_code
 fmdp=$(mktemp); chmod 600 "$fmdp"; printf '%s\n' "$MDP" > "$fmdp"
 pct push "$CTID" "$fmdp" /root/.satme-gp-mdp --perms 600
 rm -f "$fmdp"
+if [ -n "$VPN_CONF" ]; then
+  # A WireGuard interface in an unprivileged container needs the host's module.
+  modprobe wireguard 2>/dev/null || nie "module wireguard absent sur l'hôte Proxmox."
+  grep -qx wireguard /etc/modules 2>/dev/null || echo wireguard >> /etc/modules
+  pct push "$CTID" "$VPN_CONF" /root/.satme-gp-mullvad.conf --perms 600
+fi
 # The proxy sits outside the container: the server listens on every interface.
 args=(--mode "$MODE" --admin "$ADMIN" --admin-mdp-stdin --non-interactif --port "$PORT")
+[ -n "$VPN_CONF" ] && args+=(--vpn-mullvad /root/.satme-gp-mullvad.conf)
 if [ "$MODE" = caddy ]; then args+=(--domaine "$DOMAINE" --email "$EMAIL")
 else args+=(--ecoute 0.0.0.0); fi
-pct exec "$CTID" -- bash -c '/root/satme-gp/deploy/install.sh "$@" < /root/.satme-gp-mdp; s=$?; rm -f /root/.satme-gp-mdp; exit $s' _ "${args[@]}"
+pct exec "$CTID" -- bash -c '/root/satme-gp/deploy/install.sh "$@" < /root/.satme-gp-mdp; s=$?; rm -f /root/.satme-gp-mdp /root/.satme-gp-mullvad.conf; exit $s' _ "${args[@]}"
 
 ADRESSE=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo

@@ -28,6 +28,11 @@ SOURCES_DEFAUT = [
     ("visual", "CelesTrak Visual", "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=json"),
     ("weather", "CelesTrak Weather", "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=json"),
     ("cubesat", "CelesTrak CubeSat", "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=json"),
+    # TLE converted to OMM; every satellite SatNOGS follows, with the TLE source it trusts.
+    ("satnogs", "SatNOGS DB", "https://db.satnogs.org/api/tle/?format=json"),
+    # Operator ephemeris fitted by CelesTrak: often more accurate than the public GP.
+    ("supgp_iss", "CelesTrak SupGP ISS",
+     "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=iss&FORMAT=json"),
 ]
 
 REGLAGES_DEFAUT = {
@@ -41,7 +46,7 @@ REGLAGES_DEFAUT = {
     "catnr_url": "https://celestrak.org/NORAD/elements/gp.php?CATNR={n}&FORMAT=json",
     "catnr_cache_min": "360",
     # Upstream lookups allowed per hour, all clients together.
-    "catnr_max_heure": "60",
+    "catnr_max_heure": "20",
     # Sent upstream: says who fetches, as CelesTrak asks.
     "user_agent": "SatMe-GP-server/1.0 (+https://github.com/f4ioz/SatMe)",
     "nom_public": "Serveur GP SatMe",
@@ -88,10 +93,22 @@ class Store:
             """)
             for cle, valeur in REGLAGES_DEFAUT.items():
                 self._db.execute("INSERT OR IGNORE INTO reglages VALUES (?, ?)", (cle, valeur))
-            if self._db.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0:
-                for i, (sid, nom, url) in enumerate(SOURCES_DEFAUT):
-                    self._db.execute("INSERT INTO sources (id, nom, url, ordre) VALUES (?, ?, ?, ?)",
+            # 1.0.0 allowed 60 lookups an hour by default: lowered unless chosen.
+            self._db.execute("UPDATE reglages SET valeur = '20' WHERE cle = 'catnr_max_heure' AND valeur = '60'")
+            # A default source added by a newer version appears once; one the
+            # administrator deleted does not come back.
+            r = self._db.execute("SELECT valeur FROM reglages WHERE cle = 'sources_proposees'").fetchone()
+            if r is None and self._db.execute("SELECT COUNT(*) FROM sources").fetchone()[0]:
+                # Database from 1.0.0: its first six were proposed already.
+                proposees = {sid for sid, _, _ in SOURCES_DEFAUT[:6]}
+            else:
+                proposees = set(r["valeur"].split(",")) if r and r["valeur"] else set()
+            for i, (sid, nom, url) in enumerate(SOURCES_DEFAUT):
+                if sid not in proposees:
+                    self._db.execute("INSERT OR IGNORE INTO sources (id, nom, url, ordre) VALUES (?, ?, ?, ?)",
                                      (sid, nom, url, i))
+            self._db.execute("INSERT OR REPLACE INTO reglages VALUES ('sources_proposees', ?)",
+                             (",".join(sid for sid, _, _ in SOURCES_DEFAUT),))
 
     # ---- settings ----
 
@@ -105,6 +122,12 @@ class Store:
             return int(self.reglage(cle))
         except ValueError:
             return int(REGLAGES_DEFAUT[cle])
+
+    def reglage_float(self, cle: str) -> float:
+        try:
+            return float(self.reglage(cle) or 0)
+        except ValueError:
+            return 0.0
 
     def pose_reglage(self, cle: str, valeur: str) -> None:
         with self._verrou, self._db:
@@ -147,10 +170,11 @@ class Store:
                                 last_modified = ?, nombre = ?, erreur = '' WHERE id = ?""",
                              (quand, quand, etag, last_modified, nombre, sid))
 
-    def force_toutes(self) -> None:
-        """Makes every source due now (admin's "refresh")."""
+    def force(self, ids: list[str]) -> None:
+        """Makes these sources due now (admin's "refresh")."""
         with self._verrou, self._db:
-            self._db.execute("UPDATE sources SET dernier_essai = 0, etag = '', last_modified = ''")
+            self._db.executemany("UPDATE sources SET dernier_essai = 0, etag = '', last_modified = '' WHERE id = ?",
+                                 [(i,) for i in ids])
 
     # ---- group files ----
 

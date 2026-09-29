@@ -8,4 +8,4 @@ fetching each group at most every two hours, then serving everyone from its
 cache, spares the upstream sites and survives their outages.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

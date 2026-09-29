@@ -220,3 +220,159 @@ def test_activer_desactiver_une_source(client, store):
     assert client.get("/gp/amateur.json").status_code == 404
     client.post("/admin/source/amateur/bascule", data={"csrf": j})
     assert store.source("amateur").actif
+
+
+# ---------------------------------------------------------------- TLE
+
+ISS = ("ISS (ZARYA)",
+       "1 25544U 98067A   08264.51782528 -.00002182  00000-0 -11606-4 0  2927",
+       "2 25544  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537")
+
+
+def test_tle_converti_en_omm():
+    r = omm.tle_vers_omm(*ISS)
+    assert r["NORAD_CAT_ID"] == 25544 and r["OBJECT_ID"] == "1998-067A"
+    assert r["EPOCH"].startswith("2008-09-20T12:25:40")
+    assert r["MEAN_MOTION"] == 15.72125391 and r["ECCENTRICITY"] == 0.0006703
+    assert r["INCLINATION"] == 51.6416 and r["RA_OF_ASC_NODE"] == 247.4627
+    assert r["ARG_OF_PERICENTER"] == 130.536 and r["MEAN_ANOMALY"] == 325.0288
+    assert r["REV_AT_EPOCH"] == 56353 and r["ELEMENT_SET_NO"] == 292
+    assert r["BSTAR"] == pytest.approx(-0.11606e-4) and r["MEAN_MOTION_DOT"] == -0.00002182
+    assert omm.valide(r)
+
+
+def test_tle_abime_refuse():
+    faux = ISS[1][:-1] + "0"  # checksum
+    with pytest.raises(omm.TleInvalide):
+        omm.tle_vers_omm(ISS[0], faux, ISS[2])
+    autre = ISS[2].replace("25544", "25545", 1)
+    autre = autre[:-1] + str((int(autre[-1]) + 1) % 10)
+    with pytest.raises(omm.TleInvalide):
+        omm.tle_vers_omm(ISS[0], ISS[1], autre)
+
+
+def test_alpha5():
+    assert omm._alpha5("A0001") == 100001 and omm._alpha5("Z9999") == 339999
+    assert omm._alpha5("J0000") == 180000  # I is skipped
+
+
+def test_json_satnogs_reconnu():
+    satnogs = [{"tle0": "0 " + ISS[0], "tle1": ISS[1], "tle2": ISS[2], "norad_cat_id": 25544}]
+    r = omm.lit_source(json.dumps(satnogs).encode())
+    assert r[0]["OBJECT_NAME"] == "ISS (ZARYA)" and r[0]["NORAD_CAT_ID"] == 25544
+
+
+def test_tle_texte_avec_et_sans_nom():
+    r = omm.lit_source(("\n".join(ISS) + "\n").encode())
+    assert r[0]["OBJECT_NAME"] == "ISS (ZARYA)"
+    r = omm.lit_source(("\r\n".join(ISS[1:]) + "\r\n").encode())
+    assert r[0]["OBJECT_NAME"] == "25544"
+
+
+def test_omm_toujours_lu_et_html_refuse():
+    assert len(omm.lit_source(json.dumps([el(1)]).encode())) == 1
+    for mauvais in (b"<html>Error</html>", b"[]", b"No GP data found"):
+        with pytest.raises(omm.FichierRefuse):
+            omm.lit_source(mauvais)
+
+
+def test_source_satnogs_recuperee(store):
+    f = Faux()
+    satnogs = [{"tle0": ISS[0], "tle1": ISS[1], "tle2": ISS[2]}]
+    f.reponses[url(store, "satnogs")] = (200, {}, json.dumps(satnogs).encode())
+    assert "1 éléments" in fetch.recupere(store, store.source("satnogs"), f, maintenant=1000)
+    assert store.catalogue()[25544]["OBJECT_NAME"] == "ISS (ZARYA)"
+
+
+def test_supgp_suit_la_regle_celestrak(store):
+    assert fetch.intervalle_min(store, store.source("supgp_iss")) >= 120
+
+
+def test_nouvelle_source_par_defaut_ajoutee_une_fois(tmp_path):
+    s = Store(tmp_path)
+    s.supprime_source("satnogs")
+    assert Store(tmp_path).source("satnogs") is None  # deleted stays deleted
+
+
+def test_base_1_0_0_recoit_les_nouvelles_sources(tmp_path):
+    s = Store(tmp_path)
+    for sid in ("satnogs", "supgp_iss"):
+        s.supprime_source(sid)
+    s._db.execute("DELETE FROM reglages WHERE cle = 'sources_proposees'")
+    s._db.commit()
+    s.supprime_source("weather")  # removed by the administrator under 1.0.0
+    s2 = Store(tmp_path)
+    assert s2.source("satnogs") and s2.source("supgp_iss") and s2.source("weather") is None
+
+
+# ------------------------------------------------- CelesTrak politeness
+
+def test_rafraichir_ne_force_pas_celestrak(client, store):
+    connecte(client)
+    store.note_essai("amsat", 1000)
+    j = csrf(client, "/admin")
+    client.post("/admin/rafraichir", data={"csrf": j})
+    assert store.source("amsat").dernier_essai == 0
+    assert store.source("amateur").dernier_essai == 1000  # fetched by the fixture, untouched
+
+
+def test_403_met_celestrak_en_pause_groupes_et_numeros(store):
+    f = Faux()
+    f.reponses[url(store, "amateur")] = (403, {}, b"")
+    lignes = fetch.tour(store, f, maintenant=1000, ecart_s=0)
+    celestrak = [u for u, _ in f.appels if fetch.est_celestrak(u)]
+    assert celestrak == [url(store, "amateur")]  # the others of the round are not asked
+    assert any("HTTP 403" in x for x in lignes)
+    assert not fetch.a_faire(store, store.source("stations"), 1000 + 5 * 3600)
+    assert fetch.a_faire(store, store.source("stations"), 1000 + 6 * 3600)
+    avant = len(f.appels)
+    amont = fetch.Amont(store, f)
+    assert amont.cherche(12345, maintenant=2000) is None
+    assert len(f.appels) == avant  # no CATNR asked upstream
+
+
+def test_retry_after_plus_long_respecte(store):
+    f = Faux()
+    f.reponses[url(store, "amateur")] = (429, {"retry-after": "86400"}, b"")
+    fetch.recupere(store, store.source("amateur"), f, maintenant=1000)
+    assert fetch.celestrak_en_pause(store, 1000 + 23 * 3600)
+
+
+def test_catnr_403_met_en_pause(store):
+    f = Faux()
+    amont = fetch.Amont(store, f)
+    f.reponses[store.reglage("catnr_url").replace("{n}", "7")] = (403, {}, b"")
+    amont.cherche(7, maintenant=1000)
+    amont.cherche(8, maintenant=1001)
+    assert len(f.appels) == 1
+
+
+def test_numero_hors_plage_pas_demande(store):
+    f = Faux()
+    amont = fetch.Amont(store, f)
+    assert amont.cherche(0, maintenant=1000) is None
+    assert amont.cherche(400_000, maintenant=1000) is None
+    assert amont.cherche(90_000, maintenant=1000, plus_grand_connu=60_000) is None
+    assert f.appels == []
+
+
+def test_cache_des_numeros_jamais_sous_deux_heures_pour_celestrak(store):
+    store.pose_reglage("catnr_cache_min", "10")
+    assert fetch.Amont(store).cache_min() == 120
+    store.pose_reglage("catnr_url", "https://exemple.org/gp?n={n}")
+    assert fetch.Amont(store).cache_min() == 10
+
+
+def test_ancien_plafond_60_abaisse_a_20(tmp_path):
+    s = Store(tmp_path)
+    s.pose_reglage("catnr_max_heure", "60")
+    assert Store(tmp_path).reglage("catnr_max_heure") == "20"
+
+
+def test_requetes_celestrak_espacees(store, monkeypatch):
+    attentes = []
+    monkeypatch.setattr(fetch.time, "sleep", attentes.append)
+    f = Faux()
+    fetch.tour(store, f, maintenant=1000, ecart_s=3)
+    n = sum(1 for u, _ in f.appels if fetch.est_celestrak(u))
+    assert n > 1 and attentes == [3] * (n - 1)

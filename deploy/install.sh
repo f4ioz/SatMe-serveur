@@ -12,6 +12,8 @@
 #        --email moi@exemple.org --admin f4ioz
 #   sudo ./deploy/install.sh --mode proxy --ecoute 0.0.0.0 --port 8080 --admin f4ioz
 #   sudo ./deploy/install.sh --mise-a-jour    new code, same settings and data
+#   add --vpn-mullvad FICHIER.conf to send the server's own requests through
+#   Mullvad (WireGuard file generated on mullvad.net; exit chosen in /admin)
 #
 # Run again at will: data (/var/lib/satme-gp) and settings (/etc/satme-gp)
 # are kept; only the code is replaced.
@@ -27,9 +29,9 @@ ENVFILE=$CONFIG/env
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 MODE=""; DOMAINE=""; EMAIL=""; ECOUTE=""; PORT=""; ADMIN=""; MDP_STDIN=0
-MISE_A_JOUR=0; NON_INTERACTIF=0
+MISE_A_JOUR=0; NON_INTERACTIF=0; VPN_CONF=""
 
-aide() { sed -n '6,19p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+aide() { sed -n '6,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 dit()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 nie()  { printf '\033[1;31mErreur :\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -44,6 +46,7 @@ while [ $# -gt 0 ]; do
     --admin-mdp-stdin) MDP_STDIN=1; shift;;
     --mise-a-jour) MISE_A_JOUR=1; shift;;
     --non-interactif) NON_INTERACTIF=1; shift;;
+    --vpn-mullvad) VPN_CONF="$2"; shift 2;;
     -h|--help) aide 0;;
     *) echo "Option inconnue : $1" >&2; aide 1;;
   esac
@@ -52,6 +55,7 @@ done
 [ "$(id -u)" -eq 0 ] || nie "à lancer en root (sudo)."
 command -v apt-get >/dev/null || nie "seuls Debian, Ubuntu et Raspberry Pi OS sont pris en charge (apt)."
 [ -f "$SOURCE/satme_gp/app.py" ] || nie "code introuvable à côté du script ($SOURCE)."
+[ -z "$VPN_CONF" ] || [ -f "$VPN_CONF" ] || nie "fichier WireGuard introuvable : $VPN_CONF"
 
 demande() { # demande VARIABLE "question" "défaut"
   local var=$1 q=$2 def=${3:-} r
@@ -92,7 +96,7 @@ fi
 dit "Paquets système"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv ca-certificates curl rsync >/dev/null
+apt-get install -y -qq python3 python3-venv ca-certificates curl rsync iproute2 >/dev/null
 
 # ------------------------------------------------------------------- user
 if ! id "$UTILISATEUR" >/dev/null 2>&1; then
@@ -101,6 +105,8 @@ if ! id "$UTILISATEUR" >/dev/null 2>&1; then
 fi
 install -d -o "$UTILISATEUR" -g "$UTILISATEUR" -m 750 "$DONNEES"
 install -d -o root -g "$UTILISATEUR" -m 750 "$CONFIG"
+install -d -o "$UTILISATEUR" -g "$UTILISATEUR" -m 750 "$DONNEES/vpn"
+install -d -o root -g root -m 755 /var/lib/satme-gp-vpn
 
 # ------------------------------------------------------------------- code
 dit "Code dans $CODE"
@@ -146,7 +152,7 @@ dit "Service systemd"
 cat > /etc/systemd/system/$APP.service <<EOF
 [Unit]
 Description=Serveur GP SatMe (éléments orbitaux pour SatMe)
-After=network-online.target
+After=network-online.target satme-gp-vpn.service
 Wants=network-online.target
 
 [Service]
@@ -171,8 +177,50 @@ RestrictSUIDSGID=true
 [Install]
 WantedBy=multi-user.target
 EOF
+# Optional Mullvad tunnel: a root helper the web admin reaches only through a
+# one-line request file, watched by a path unit.
+install -m 755 -o root -g root "$SOURCE/deploy/satme-gp-vpn" /usr/local/sbin/satme-gp-vpn
+cat > /etc/systemd/system/$APP-vpn.service <<EOF
+[Unit]
+Description=Serveur GP SatMe : tunnel Mullvad (optionnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/satme-gp-vpn restaure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/$APP-vpn-demande.service <<EOF
+[Unit]
+Description=Serveur GP SatMe : demande de tunnel faite dans l'administration
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/satme-gp-vpn applique
+EOF
+cat > /etc/systemd/system/$APP-vpn-demande.path <<EOF
+[Unit]
+Description=Serveur GP SatMe : attente des demandes de tunnel
+
+[Path]
+PathChanged=$DONNEES/vpn/demande
+Unit=$APP-vpn-demande.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
 systemctl daemon-reload
-systemctl enable --quiet $APP
+systemctl enable --quiet $APP $APP-vpn.service $APP-vpn-demande.path
+systemctl start $APP-vpn-demande.path
+[ -f /var/lib/satme-gp-vpn/etat.json ] || /usr/local/sbin/satme-gp-vpn restaure || true
+if [ -n "$VPN_CONF" ]; then
+  dit "Clé Mullvad"
+  /usr/local/sbin/satme-gp-vpn cle "$VPN_CONF"
+fi
 
 # ------------------------------------------------------------------ admin
 if [ "$MISE_A_JOUR" -eq 0 ]; then
@@ -250,4 +298,9 @@ else
   echo "      systemctl restart $APP"
 fi
 echo "  Journal          : journalctl -u $APP -f"
+if [ -f "$CONFIG/mullvad.key" ]; then
+  echo "  VPN Mullvad      : sortie à choisir dans l'administration (ou satme-gp-vpn sortie HOTE)"
+else
+  echo "  VPN Mullvad      : optionnel, sudo satme-gp-vpn cle FICHIER.conf (voir le README)"
+fi
 echo "  Mise à jour      : sudo $SOURCE/deploy/update.sh"

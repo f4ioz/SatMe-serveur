@@ -25,7 +25,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import __version__
-from .fetch import Amont, intervalle_min
+from . import vpn
+from .fetch import Amont, celestrak_en_pause, est_celestrak, intervalle_min
 from .limite import Limiteur
 from .store import Store
 
@@ -112,8 +113,9 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         return sert_json(corps, etag, modifie)
 
     def par_numero(n: int) -> Response:
-        r = store.catalogue().get(n)
-        liste = [r] if r else amont.cherche(n)
+        catalogue = store.catalogue()
+        r = catalogue.get(n)
+        liste = [r] if r else amont.cherche(n, plus_grand_connu=max(catalogue, default=None))
         if not liste:
             return Response("No GP data found", status=404, mimetype="text/plain")
         corps = json.dumps(liste, separators=(",", ":")).encode()
@@ -225,6 +227,12 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         return render_template("admin.html", sources=sources, store=store,
                                intervalles={s.id: intervalle_min(store, s) for s in sources},
                                stats=store.statistiques(), maintenant=time.time(),
+                               pause_celestrak=(store.reglage_float("celestrak_pause_jusqua")
+                                                if celestrak_en_pause(store, time.time()) else 0),
+                               raison_pause=store.reglage("celestrak_pause_raison"),
+                               vpn_etat=(e := vpn.etat()),
+                               vpn_sorties=(vpn.sorties(store, amont.telecharge) if e.get("cle") else []),
+                               vpn_test=session.pop("vpn_test", None),
                                reglages={k: store.reglage(k) for k in (
                                    "nom_public", "intervalle_min", "limite_requetes", "fenetre_s",
                                    "catnr_amont", "catnr_url", "catnr_cache_min", "catnr_max_heure",
@@ -277,9 +285,50 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         if r:
             return r
         verifie_csrf()
-        store.force_toutes()
-        flash("Toutes les sources seront récupérées dans la minute "
-              "(sauf CelesTrak, jamais plus d'une fois en deux heures).")
+        ids = [s.id for s in store.sources() if not est_celestrak(s.url)]
+        store.force(ids)
+        flash(f"{len(ids)} source(s) récupérée(s) dans la minute. CelesTrak n'est jamais "
+              "demandé plus d'une fois en deux heures : ses groupes suivent leur rythme.")
+        return redirect(url_for("admin"))
+
+    @app.post("/admin/vpn")
+    def admin_vpn():
+        """Asks the root helper for another exit, or for no tunnel."""
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        if not vpn.etat().get("cle"):
+            flash("VPN non configuré sur cette machine (voir le README).")
+            return redirect(url_for("admin"))
+        if request.form.get("action") == "arret":
+            ligne = "arret"
+        else:
+            hote = request.form.get("sortie", "")
+            if hote not in {x["hostname"] for x in vpn.sorties(store, amont.telecharge)}:
+                flash("Sortie inconnue.")
+                return redirect(url_for("admin"))
+            ligne = f"sortie {hote}"
+        jeton = vpn.demande(store, ligne)
+        e = vpn.attend(jeton)
+        if e.get("jeton") != jeton:
+            flash("Demande envoyée, pas encore traitée : rechargez la page dans un moment.")
+        elif e.get("erreur"):
+            flash(f"VPN : {e['erreur']}")
+        elif e.get("actif"):
+            flash(f"Tunnel par {e.get('sortie')} ({e.get('ville')}, {e.get('pays')}). "
+                  "Cliquez sur Tester pour vérifier la sortie.")
+        else:
+            flash("Plus de tunnel : connexion directe.")
+        return redirect(url_for("admin"))
+
+    @app.post("/admin/vpn/test")
+    def admin_vpn_test():
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        session["vpn_test"] = vpn.teste(store, amont.telecharge)
         return redirect(url_for("admin"))
 
     @app.post("/admin/reglages")

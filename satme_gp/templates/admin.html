@@ -11,8 +11,12 @@
   <div class="ligne" style="justify-content:space-between;margin-top:0">
     <h2>Sources</h2>
     <form method="post" action="{{ url_for('admin_rafraichir') }}"><input type="hidden" name="csrf" value="{{ csrf() }}">
-      <button type="submit">Tout récupérer maintenant</button></form>
+      <button type="submit">Récupérer maintenant (hors CelesTrak)</button></form>
   </div>
+  {% if pause_celestrak %}
+  <p class="ko">CelesTrak a répondu {{ raison_pause }} : plus aucune requête chez lui jusqu'au
+     {{ pause_celestrak | date }}. Les copies déjà reçues restent servies.</p>
+  {% endif %}
   <table>
     <tr><th>Id</th><th>Nom</th><th>État</th><th>Satellites</th><th>Dernier succès</th><th>Dernier essai</th><th>Toutes les</th><th></th></tr>
     {% for s in sources %}
@@ -37,19 +41,69 @@
   </table>
   <h2 style="margin-top:16px">Ajouter ou modifier une source</h2>
   <p class="sub">Même identifiant qu'une source existante : elle est modifiée. Il devient l'adresse
-     <code>/gp/&lt;id&gt;.json</code> et <code>gp.php?GROUP=&lt;id&gt;</code>. CelesTrak : jamais moins de 120 min.</p>
+     <code>/gp/&lt;id&gt;.json</code> et <code>gp.php?GROUP=&lt;id&gt;</code>. Les TLE sont convertis en OMM. CelesTrak : jamais moins de 120 min.</p>
   <form method="post" action="{{ url_for('admin_source') }}">
     <input type="hidden" name="csrf" value="{{ csrf() }}">
     <div class="grille">
       <div class="champ"><label>Identifiant</label><input name="id" required pattern="[A-Za-z0-9_-]+"></div>
       <div class="champ"><label>Nom affiché</label><input name="nom"></div>
-      <div class="champ" style="grid-column:span 2"><label>Adresse (OMM JSON, https)</label><input name="url" type="url" required></div>
+      <div class="champ" style="grid-column:span 2"><label>Adresse https (OMM JSON, JSON SatNOGS ou TLE texte)</label><input name="url" type="url" required></div>
       <div class="champ"><label>Intervalle (min, vide = réglage général)</label><input name="intervalle_min" inputmode="numeric"></div>
       <div class="champ"><label>Active</label><select name="actif"><option value="1">oui</option><option value="0">non</option></select></div>
     </div>
     <div class="ligne"><button class="primaire" type="submit">Enregistrer la source</button></div>
   </form>
 </div>
+
+{% if vpn_etat.helper %}
+<div class="carte">
+  <h2>VPN Mullvad (optionnel)</h2>
+  <p class="sub">Seules les requêtes que ce serveur fait vers les sources passent par le tunnel ;
+     les visiteurs arrivent toujours par le nom de domaine, et la machine garde sa connexion.
+     Tant qu'un tunnel est choisi, rien ne sort en direct : s'il tombe, les requêtes échouent.
+     Changer de sortie ne lève pas la pause CelesTrak.</p>
+  {% if not vpn_etat.cle %}
+  <p>Pas de clé : générez un fichier WireGuard sur mullvad.net (Compte → Configuration WireGuard),
+     puis sur la machine : <code>sudo satme-gp-vpn cle mullvad.conf</code></p>
+  {% else %}
+  <p>État :
+    {% if vpn_etat.actif %}<span class="ok">tunnel par {{ vpn_etat.sortie }}</span> ({{ vpn_etat.ville }}, {{ vpn_etat.pays }}){% if vpn_etat.depuis %} depuis le {{ vpn_etat.depuis | date }}{% endif %}
+    {% elif vpn_etat.voulu %}<span class="ko">tunnel voulu mais absent : requêtes bloquées</span>
+    {% else %}<span class="sub">connexion directe</span>{% endif %}
+    {% if vpn_etat.erreur %}<br><span class="ko">{{ vpn_etat.erreur }}</span>{% endif %}</p>
+  <form method="post" action="{{ url_for('admin_vpn') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="ligne">
+      <select name="sortie" aria-label="Sortie Mullvad" style="min-width:0;max-width:100%">
+        {% for pays, groupe in vpn_sorties | groupby("pays") %}
+        <optgroup label="{{ pays }}">
+          {% for x in groupe %}
+          <option value="{{ x.hostname }}" {% if x.hostname == vpn_etat.sortie %}selected{% endif %}>
+            {{ x.ville }} — {{ x.hostname }}{% if x.possede %} · Mullvad{% else %} · {{ x.fournisseur }}{% endif %}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      <button class="primaire" type="submit" name="action" value="sortie">Utiliser cette sortie</button>
+      {% if vpn_etat.voulu %}<button type="submit" name="action" value="arret">Couper le tunnel</button>{% endif %}
+    </div>
+  </form>
+  <p class="sub">{{ vpn_sorties | length }} sorties en service.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('admin_vpn_test') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="ligne"><button type="submit">Tester</button></div>
+  </form>
+  {% if vpn_test %}
+    {% if vpn_test.erreur %}<p class="ko">Test : {{ vpn_test.erreur }}</p>
+    {% else %}<p>Test : sortie vue d'Internet <code>{{ vpn_test.ip }}</code> ({{ vpn_test.ville }}, {{ vpn_test.pays }}) —
+      {% if vpn_test.mullvad %}<span class="ok">Mullvad {{ vpn_test.sortie }}</span>
+      {% else %}<span class="ambre">connexion directe, pas Mullvad</span>{% endif %}
+      {% if vpn_test.liste_noire %} · <span class="ko">adresse sur une liste noire</span>{% endif %}</p>
+    {% endif %}
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="carte">
   <h2>Réglages</h2>
@@ -63,7 +117,7 @@
       <div class="champ"><label>Recherche par numéro chez la source</label>
         <select name="catnr_amont"><option value="1" {% if reglages.catnr_amont == '1' %}selected{% endif %}>oui</option>
           <option value="0" {% if reglages.catnr_amont != '1' %}selected{% endif %}>non</option></select></div>
-      <div class="champ"><label>Garder une recherche (min)</label><input name="catnr_cache_min" value="{{ reglages.catnr_cache_min }}"></div>
+      <div class="champ"><label>Garder une recherche (min, 120 au moins pour CelesTrak)</label><input name="catnr_cache_min" value="{{ reglages.catnr_cache_min }}"></div>
       <div class="champ"><label>Recherches par heure au plus</label><input name="catnr_max_heure" value="{{ reglages.catnr_max_heure }}"></div>
       <div class="champ" style="grid-column:span 2"><label>Adresse de recherche ({n} = numéro)</label><input name="catnr_url" value="{{ reglages.catnr_url }}"></div>
       <div class="champ" style="grid-column:span 2"><label>User-Agent envoyé aux sources</label><input name="user_agent" value="{{ reglages.user_agent }}"></div>

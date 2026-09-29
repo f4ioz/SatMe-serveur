@@ -1,0 +1,360 @@
+#!/usr/bin/python3
+# SatMe GP server — orbital elements (OMM/GP) relay for SatMe.
+# Copyright (C) 2025-2026  Olivier Gouyen (F4IOZ)
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Optional Mullvad WireGuard tunnel for the server's own requests.
+
+Runs as root. Only the requests the satme-gp user makes go through the
+tunnel (policy routing by uid): fetching the sources. Visitors keep reaching
+the server through its domain name, their replies leaving by the normal
+connection (connection mark); SSH, Caddy and the rest of the machine are
+left alone. The web admin (unprivileged) cannot run this: it writes a one-line
+request in its data folder, a systemd path unit calls "applique", and this
+script checks the request strictly before acting.
+
+  satme-gp-vpn cle FICHIER.conf   import a WireGuard file made on mullvad.net
+  satme-gp-vpn sortie HOTE        tunnel through this exit (e.g. fr-par-wg-001)
+  satme-gp-vpn arret              no tunnel
+  satme-gp-vpn etat               what is in place
+  satme-gp-vpn oublie             tunnel removed and key deleted
+  satme-gp-vpn applique           (path unit) carries out the admin's request
+  satme-gp-vpn restaure           (boot) puts back the last choice
+
+While the tunnel is chosen, the server's traffic never falls back to the
+plain connection: if the tunnel is down, requests fail instead.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import time
+import urllib.request
+
+UTILISATEUR = "satme-gp"
+INTERFACE = "satmegp0"
+TABLE = "51820"
+PRIO_ENTREE, PRIO_LOCAL, PRIO_TUNNEL = "5199", "5200", "5201"
+MARQUE = "0x5347"
+NFT_TABLE = "satme_gp_vpn"
+# Connections opened from outside (visitors through the domain name) are
+# marked, and their replies keep the normal connection: only what the server
+# itself asks for goes through the tunnel.
+NFT = f"""table inet {NFT_TABLE} {{
+  chain entree {{
+    type filter hook prerouting priority mangle; policy accept;
+    iifname != "{INTERFACE}" ct state new ct mark set {MARQUE}
+  }}
+  chain sortie {{
+    type route hook output priority mangle; policy accept;
+    ct mark {MARQUE} meta mark set {MARQUE}
+  }}
+}}
+"""
+PORT = 51820
+
+CONFIG = os.environ.get("SATME_GP_VPN_CONFIG", "/etc/satme-gp")
+CLE = os.path.join(CONFIG, "mullvad.key")          # private key, root 600
+ADRESSES = os.path.join(CONFIG, "mullvad.adresses")  # tunnel addresses, root 600
+ETAT_DIR = os.environ.get("SATME_GP_VPN_ETAT", "/var/lib/satme-gp-vpn")
+CHOIX = os.path.join(ETAT_DIR, "choix.json")
+ETAT = os.path.join(ETAT_DIR, "etat.json")
+DEMANDE = os.environ.get("SATME_GP_VPN_DEMANDE", "/var/lib/satme-gp/vpn/demande")
+RELAIS_URL = os.environ.get("SATME_GP_VPN_RELAIS_URL",
+                            "https://api.mullvad.net/public/relays/wireguard/v2/")
+
+CLE_WG = re.compile(r"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=")
+HOTE = re.compile(r"[a-z0-9-]{3,40}")
+JETON = re.compile(r"[A-Za-z0-9_-]{1,40}")
+
+
+class Refus(Exception):
+    """A request or a file that is not what it should be: nothing is changed."""
+
+
+# ------------------------------------------------------------------ files
+
+def ecrit(chemin: str, texte: str, mode: int = 0o644) -> None:
+    tmp = chemin + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "w") as f:
+        f.write(texte)
+    os.chmod(tmp, mode)
+    os.replace(tmp, chemin)
+
+
+def lit_json(chemin: str) -> dict:
+    try:
+        with open(chemin) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def note_etat(**champs) -> None:
+    os.makedirs(ETAT_DIR, mode=0o755, exist_ok=True)
+    etat = lit_json(ETAT)
+    etat.update(champs, helper=True, cle=os.path.exists(CLE), quand=time.time())
+    ecrit(ETAT, json.dumps(etat, ensure_ascii=False))
+
+
+def uid() -> str:
+    return str(pwd.getpwnam(UTILISATEUR).pw_uid)
+
+
+# -------------------------------------------------------------- commands
+
+def lance(*args: str, tolere: bool = False) -> bool:
+    r = subprocess.run(args, capture_output=True, text=True)
+    if r.returncode and not tolere:
+        raise Refus(f"{' '.join(args[:3])} : {r.stderr.strip()[:200]}")
+    return r.returncode == 0
+
+
+def regles(presentes: bool) -> None:
+    """The uid rules and the table's fallback that keeps traffic from leaking."""
+    u = uid()
+    lance("nft", "delete", "table", "inet", NFT_TABLE, tolere=True)
+    if presentes:
+        r = subprocess.run(["nft", "-f", "-"], input=NFT, capture_output=True, text=True)
+        if r.returncode:
+            raise Refus(f"nftables : {r.stderr.strip()[:200]}")
+    for fam in ("-4", "-6"):
+        for prio in (PRIO_ENTREE, PRIO_LOCAL, PRIO_TUNNEL):
+            while lance("ip", fam, "rule", "del", "priority", prio, tolere=True):
+                pass
+        lance("ip", fam, "route", "flush", "table", TABLE, tolere=True)
+        if not presentes:
+            continue
+        ok6 = fam == "-4"  # IPv6 may be off on the machine: tolerated
+        lance("ip", fam, "rule", "add", "priority", PRIO_ENTREE, "fwmark", MARQUE,
+              "lookup", "main", tolere=not ok6)
+        # Local networks (LAN proxy, resolver) keep the main table; not its default route.
+        lance("ip", fam, "rule", "add", "priority", PRIO_LOCAL, "uidrange", f"{u}-{u}",
+              "lookup", "main", "suppress_prefixlength", "0", tolere=not ok6)
+        lance("ip", fam, "rule", "add", "priority", PRIO_TUNNEL, "uidrange", f"{u}-{u}",
+              "lookup", TABLE, tolere=not ok6)
+        # Tunnel gone: this unreachable default stops the traffic instead of the main table.
+        lance("ip", fam, "route", "replace", "unreachable", "default", "metric", "4000",
+              "table", TABLE, tolere=not ok6)
+
+
+def demonte() -> None:
+    lance("ip", "link", "del", INTERFACE, tolere=True)
+    if shutil.which("nft"):
+        regles(False)
+    else:
+        lance("ip", "-4", "rule", "del", "priority", PRIO_TUNNEL, tolere=True)
+
+
+def monte(choix: dict) -> None:
+    if not os.path.exists(CLE):
+        raise Refus("pas de clé Mullvad : satme-gp-vpn cle FICHIER.conf")
+    for prog, paquet in (("wg", "wireguard-tools"), ("nft", "nftables")):
+        if not shutil.which(prog):
+            raise Refus(f"{paquet} absent (apt install {paquet})")
+    adresses = open(ADRESSES).read().split()
+    lance("ip", "link", "del", INTERFACE, tolere=True)
+    regles(True)  # first: no window where the traffic would go out plainly
+    lance("ip", "link", "add", INTERFACE, "type", "wireguard")
+    lance("wg", "set", INTERFACE, "private-key", CLE, "peer", choix["public_key"],
+          "endpoint", f"{choix['ipv4']}:{PORT}", "allowed-ips", "0.0.0.0/0,::/0",
+          "persistent-keepalive", "25")
+    for a in adresses:
+        lance("ip", "addr", "add", a, "dev", INTERFACE, tolere=":" in a)
+    lance("ip", "link", "set", "mtu", "1380", "up", "dev", INTERFACE)
+    lance("ip", "-4", "route", "replace", "default", "dev", INTERFACE, "table", TABLE)
+    lance("ip", "-6", "route", "replace", "default", "dev", INTERFACE, "table", TABLE, tolere=True)
+
+
+# ----------------------------------------------------------------- relays
+
+def relais() -> list[dict]:
+    with urllib.request.urlopen(RELAIS_URL, timeout=30) as r:
+        d = json.load(r)
+    lieux = d.get("locations", {})
+    sortie = []
+    for x in d.get("wireguard", {}).get("relays", []):
+        lieu = lieux.get(x.get("location"), {})
+        sortie.append({"hostname": x.get("hostname"), "public_key": x.get("public_key"),
+                       "ipv4": x.get("ipv4_addr_in"), "actif": bool(x.get("active")),
+                       "pays": lieu.get("country", ""), "ville": lieu.get("city", "")})
+    return sortie
+
+
+def trouve(hote: str) -> dict:
+    if not HOTE.fullmatch(hote):
+        raise Refus("nom de sortie invalide")
+    try:
+        r = next((x for x in relais() if x["hostname"] == hote), None)
+    except (OSError, ValueError) as e:
+        # List out of reach (already inside a broken tunnel?): the last choice, if the same.
+        ancien = lit_json(CHOIX)
+        if ancien.get("hostname") == hote:
+            return ancien
+        raise Refus(f"liste des sorties Mullvad injoignable ({e.__class__.__name__})")
+    if r is None:
+        raise Refus(f"sortie {hote} inconnue chez Mullvad")
+    if not r["actif"]:
+        raise Refus(f"sortie {hote} hors service chez Mullvad")
+    if not CLE_WG.fullmatch(r["public_key"] or ""):
+        raise Refus("clé de la sortie illisible")
+    ipaddress.IPv4Address(r["ipv4"])
+    return r
+
+
+def choisit(hote: str) -> dict:
+    r = trouve(hote)
+    choix = {k: r[k] for k in ("hostname", "public_key", "ipv4", "pays", "ville")}
+    try:
+        monte(choix)
+    except Refus as e:
+        # The tunnel was asked for: traffic stays blocked rather than plain.
+        ecrit(CHOIX, json.dumps({**choix, "actif": True}))
+        note_etat(actif=False, voulu=True, sortie=hote, pays=r["pays"], ville=r["ville"], erreur=str(e))
+        raise
+    ecrit(CHOIX, json.dumps({**choix, "actif": True}))
+    depuis = lit_json(ETAT).get("depuis") if lit_json(ETAT).get("voulu") else None
+    note_etat(actif=True, voulu=True, sortie=hote, pays=r["pays"], ville=r["ville"], erreur="",
+              depuis=depuis or time.time())
+    return choix
+
+
+def arrete() -> None:
+    demonte()
+    choix = lit_json(CHOIX)
+    if choix:
+        ecrit(CHOIX, json.dumps({**choix, "actif": False}))
+    note_etat(actif=False, voulu=False, erreur="", depuis=None)
+
+
+# ------------------------------------------------------------------- key
+
+def importe_cle(fichier: str) -> None:
+    """PrivateKey and Address of a WireGuard file generated on mullvad.net."""
+    texte = open(fichier).read()
+    cle = re.search(r"^\s*PrivateKey\s*=\s*(\S+)\s*$", texte, re.M)
+    adr = re.search(r"^\s*Address\s*=\s*(.+?)\s*$", texte, re.M)
+    if not cle or not CLE_WG.fullmatch(cle.group(1)):
+        raise Refus("PrivateKey introuvable ou illisible dans le fichier")
+    if not adr:
+        raise Refus("Address introuvable dans le fichier")
+    adresses = []
+    for a in adr.group(1).split(","):
+        adresses.append(str(ipaddress.ip_interface(a.strip())))
+    if not any(":" not in a for a in adresses):
+        raise Refus("pas d'adresse IPv4 dans le fichier")
+    manque = [p for prog, p in (("wg", "wireguard-tools"), ("nft", "nftables")) if not shutil.which(prog)]
+    if manque:
+        print(f"Installation de {' '.join(manque)}…")
+        subprocess.run(["apt-get", "install", "-y", "-qq", *manque], check=True, stdout=subprocess.DEVNULL,
+                       env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
+    os.makedirs(CONFIG, exist_ok=True)
+    ecrit(CLE, cle.group(1) + "\n", 0o600)
+    ecrit(ADRESSES, "\n".join(adresses) + "\n", 0o600)
+    note_etat()
+    print(f"Clé importée ({', '.join(adresses)}). Choisissez une sortie dans l'administration,")
+    print("ou : satme-gp-vpn sortie fr-par-wg-001")
+
+
+# ------------------------------------------------------------ admin side
+
+def lit_demande() -> tuple[str, str, str]:
+    """The admin's one-line request, read without following links, strictly parsed."""
+    try:
+        fd = os.open(DEMANDE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise Refus("pas de demande")
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refus("demande illisible")
+        brut = os.read(fd, 200).decode("ascii", "replace").strip()
+    finally:
+        os.close(fd)
+    m = re.fullmatch(r"(sortie) (\S+) (\S+)|(arret) (\S+)", brut)
+    if not m:
+        raise Refus("demande illisible")
+    if m.group(1):
+        quoi, hote, jeton = m.group(1), m.group(2), m.group(3)
+    else:
+        quoi, hote, jeton = m.group(4), "", m.group(5)
+    if not JETON.fullmatch(jeton) or (hote and not HOTE.fullmatch(hote)):
+        raise Refus("demande illisible")
+    return quoi, hote, jeton
+
+
+def applique() -> None:
+    try:
+        quoi, hote, jeton = lit_demande()
+    except Refus as e:
+        note_etat(erreur=str(e))
+        return
+    try:
+        if quoi == "sortie":
+            choisit(hote)
+        else:
+            arrete()
+        note_etat(jeton=jeton)
+    except Refus as e:
+        note_etat(jeton=jeton, erreur=str(e))
+
+
+def restaure() -> None:
+    choix = lit_json(CHOIX)
+    if not choix.get("actif"):
+        demonte()
+        note_etat(actif=False, voulu=False)
+        return
+    try:
+        monte(choix)
+        note_etat(actif=True, voulu=True, sortie=choix["hostname"], erreur="")
+    except Refus as e:
+        note_etat(actif=False, voulu=True, erreur=str(e))
+
+
+def main(argv: list[str]) -> int:
+    if os.geteuid() != 0:
+        print("à lancer en root", file=sys.stderr)
+        return 1
+    try:
+        match argv:
+            case ["cle", fichier]:
+                importe_cle(fichier)
+            case ["sortie", hote]:
+                c = choisit(hote)
+                print(f"Tunnel par {c['hostname']} ({c['ville']}, {c['pays']}).")
+            case ["arret"]:
+                arrete()
+                print("Plus de tunnel : connexion directe.")
+            case ["oublie"]:
+                arrete()
+                for f in (CLE, ADRESSES, CHOIX):
+                    if os.path.exists(f):
+                        os.remove(f)
+                note_etat(actif=False, voulu=False, sortie="", erreur="")
+                print("Tunnel retiré, clé effacée.")
+            case ["etat"]:
+                print(json.dumps(lit_json(ETAT), ensure_ascii=False, indent=1))
+                subprocess.run(["wg", "show", INTERFACE], check=False)
+            case ["applique"]:
+                applique()
+            case ["restaure"]:
+                restaure()
+            case _:
+                print(__doc__.split("\n\n")[2])
+                return 2
+    except Refus as e:
+        print(f"Erreur : {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
