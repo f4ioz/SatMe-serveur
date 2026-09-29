@@ -70,6 +70,8 @@ ETAT_DIR = os.environ.get("SATME_GP_VPN_ETAT", "/var/lib/satme-gp-vpn")
 CHOIX = os.path.join(ETAT_DIR, "choix.json")
 ETAT = os.path.join(ETAT_DIR, "etat.json")
 DEMANDE = os.environ.get("SATME_GP_VPN_DEMANDE", "/var/lib/satme-gp/vpn/demande")
+# A WireGuard file sent through the admin page, next to the request.
+IMPORT = os.path.join(os.path.dirname(DEMANDE), "import.conf")
 RELAIS_URL = os.environ.get("SATME_GP_VPN_RELAIS_URL",
                             "https://api.mullvad.net/public/relays/wireguard/v2/")
 
@@ -166,7 +168,9 @@ def monte(choix: dict) -> None:
     adresses = open(ADRESSES).read().split()
     lance("ip", "link", "del", INTERFACE, tolere=True)
     regles(True)  # first: no window where the traffic would go out plainly
-    lance("ip", "link", "add", INTERFACE, "type", "wireguard")
+    if not lance("ip", "link", "add", INTERFACE, "type", "wireguard", tolere=True):
+        raise Refus("WireGuard indisponible dans le noyau (conteneur Proxmox : "
+                    "sur l'hôte, modprobe wireguard et « wireguard » dans /etc/modules)")
     lance("wg", "set", INTERFACE, "private-key", CLE, "peer", choix["public_key"],
           "endpoint", f"{choix['ipv4']}:{PORT}", "allowed-ips", "0.0.0.0/0,::/0",
           "persistent-keepalive", "25")
@@ -251,7 +255,11 @@ def arrete() -> None:
 
 def importe_cle(fichier: str) -> None:
     """PrivateKey and Address of a WireGuard file generated on mullvad.net."""
-    texte = open(fichier).read()
+    importe_texte(open(fichier).read())
+    print("Choisissez une sortie dans l'administration, ou : satme-gp-vpn sortie fr")
+
+
+def importe_texte(texte: str) -> list[str]:
     cle = re.search(r"^\s*PrivateKey\s*=\s*(\S+)\s*$", texte, re.M)
     adr = re.search(r"^\s*Address\s*=\s*(.+?)\s*$", texte, re.M)
     if not cle or not CLE_WG.fullmatch(cle.group(1)):
@@ -272,8 +280,35 @@ def importe_cle(fichier: str) -> None:
     ecrit(CLE, cle.group(1) + "\n", 0o600)
     ecrit(ADRESSES, "\n".join(adresses) + "\n", 0o600)
     note_etat()
-    print(f"Clé importée ({', '.join(adresses)}). Choisissez une sortie dans l'administration,")
-    print("ou : satme-gp-vpn sortie fr-par-wg-001")
+    print(f"Clé importée ({', '.join(adresses)}).")
+    return adresses
+
+
+def lit_import() -> str:
+    """The file the admin page left, read without following links, then removed."""
+    try:
+        fd = os.open(IMPORT, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise Refus("fichier WireGuard absent")
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refus("fichier WireGuard illisible")
+        texte = os.read(fd, 8192).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(IMPORT)  # the private key does not stay in the web side's folder
+        except OSError:
+            pass
+    return texte
+
+
+def oublie() -> None:
+    arrete()
+    for f in (CLE, ADRESSES, CHOIX):
+        if os.path.exists(f):
+            os.remove(f)
+    note_etat(actif=False, voulu=False, sortie="", erreur="", depuis=None)
 
 
 # ------------------------------------------------------------ admin side
@@ -290,7 +325,7 @@ def lit_demande() -> tuple[str, str, str]:
         brut = os.read(fd, 200).decode("ascii", "replace").strip()
     finally:
         os.close(fd)
-    m = re.fullmatch(r"(sortie) (\S+) (\S+)|(arret) (\S+)", brut)
+    m = re.fullmatch(r"(sortie|cle) (\S+) (\S+)|(arret|oublie) (\S+)", brut)
     if not m:
         raise Refus("demande illisible")
     if m.group(1):
@@ -311,6 +346,13 @@ def applique() -> None:
     try:
         if quoi == "sortie":
             choisit(hote)
+        elif quoi == "cle":
+            # Sent from the admin page: key imported, then an exit in the chosen
+            # country or city, all at once.
+            importe_texte(lit_import())
+            choisit(hote)
+        elif quoi == "oublie":
+            oublie()
         else:
             arrete()
         note_etat(jeton=jeton)
@@ -354,11 +396,7 @@ def main(argv: list[str]) -> int:
                 arrete()
                 print("Plus de tunnel : connexion directe.")
             case ["oublie"]:
-                arrete()
-                for f in (CLE, ADRESSES, CHOIX):
-                    if os.path.exists(f):
-                        os.remove(f)
-                note_etat(actif=False, voulu=False, sortie="", erreur="")
+                oublie()
                 print("Tunnel retiré, clé effacée.")
             case ["etat"]:
                 print(json.dumps(lit_json(ETAT), ensure_ascii=False, indent=1))

@@ -231,7 +231,9 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
                                                 if celestrak_en_pause(store, time.time()) else 0),
                                raison_pause=store.reglage("celestrak_pause_raison"),
                                vpn_etat=(e := vpn.etat()),
-                               vpn_sorties=(vpn.sorties(store, amont.telecharge) if e.get("cle") else []),
+                               vpn_sorties=(sorties := vpn.sorties(store, amont.telecharge)
+                                            if e.get("helper") else []),
+                               vpn_pays=vpn.pays(sorties),
                                vpn_test=session.pop("vpn_test", None),
                                reglages={k: store.reglage(k) for k in (
                                    "nom_public", "intervalle_min", "limite_requetes", "fenetre_s",
@@ -316,10 +318,50 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         elif e.get("erreur"):
             flash(f"VPN : {e['erreur']}")
         elif e.get("actif"):
-            flash(f"Tunnel par {e.get('sortie')} ({e.get('ville')}, {e.get('pays')}). "
-                  "Cliquez sur Tester pour vérifier la sortie.")
+            flash(f"Tunnel par {e.get('sortie')} ({e.get('ville')}, {e.get('pays')}).")
+            session["vpn_test"] = vpn.teste(store, amont.telecharge)
         else:
             flash("Plus de tunnel : connexion directe.")
+        return redirect(url_for("admin"))
+
+    @app.post("/admin/vpn/cle")
+    def admin_vpn_cle():
+        """The Mullvad file sent from the page: key, exit and test in one go."""
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        f = request.files.get("fichier")
+        texte = (f.read(8192).decode("utf-8", "replace") if f and f.filename else "") \
+            or request.form.get("texte", "")
+        pourquoi = vpn.verifie_fichier(texte)
+        lieu = request.form.get("pays", "fr")
+        codes = {c for c, _ in vpn.pays(vpn.sorties(store, amont.telecharge))}
+        if not pourquoi and lieu not in codes:
+            pourquoi = "pays inconnu"
+        if pourquoi:
+            flash(f"VPN : {pourquoi}.")
+            return redirect(url_for("admin"))
+        jeton = vpn.envoie_cle(store, texte, lieu)
+        e = vpn.attend(jeton, 40)
+        if e.get("jeton") != jeton:
+            flash("Fichier envoyé, pas encore traité : rechargez la page dans un moment.")
+        elif e.get("erreur"):
+            flash(f"VPN : {e['erreur']}")
+        else:
+            flash(f"VPN en place : sortie {e.get('sortie')} ({e.get('ville')}, {e.get('pays')}).")
+            session["vpn_test"] = vpn.teste(store, amont.telecharge)
+        return redirect(url_for("admin"))
+
+    @app.post("/admin/vpn/oublie")
+    def admin_vpn_oublie():
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        e = vpn.attend(vpn.demande(store, "oublie"))
+        flash(f"VPN : {e['erreur']}" if e.get("erreur") else
+              "VPN retiré, clé effacée : connexion directe. Pensez à retirer l'appareil sur mullvad.net.")
         return redirect(url_for("admin"))
 
     @app.post("/admin/vpn/test")

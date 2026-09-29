@@ -14,6 +14,8 @@
 #   sudo ./deploy/install.sh --mise-a-jour    new code, same settings and data
 #   sudo ./deploy/install.sh --mode proxy --domaine gp.exemple.org --https ...
 #        (HTTPS done by the proxy in front: secure admin cookie)
+#   --sources amsat,satnogs,numero   sources asked (asked if not given; others
+#        off, changeable in /admin); numero = lookups by number upstream
 #   add --vpn-mullvad FICHIER.conf [--vpn-sortie fr] to send the server's own
 #   requests through Mullvad (WireGuard file generated on mullvad.net; exit:
 #   country, city or relay, changeable later in /admin)
@@ -32,9 +34,9 @@ ENVFILE=$CONFIG/env
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 MODE=""; DOMAINE=""; EMAIL=""; ECOUTE=""; PORT=""; ADMIN=""; MDP_STDIN=0
-MISE_A_JOUR=0; NON_INTERACTIF=0; VPN_CONF=""; VPN_SORTIE=""; HTTPS_PROXY=0
+MISE_A_JOUR=0; NON_INTERACTIF=0; VPN_CONF=""; VPN_SORTIE=""; HTTPS_PROXY=0; SOURCES=""
 
-aide() { sed -n '6,24p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+aide() { sed -n '6,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 dit()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 nie()  { printf '\033[1;31mErreur :\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -52,6 +54,7 @@ while [ $# -gt 0 ]; do
     --vpn-mullvad) VPN_CONF="$2"; shift 2;;
     --vpn-sortie) VPN_SORTIE="$2"; shift 2;;
     --https) HTTPS_PROXY=1; shift;;
+    --sources) SOURCES="$2"; shift 2;;
     -h|--help) aide 0;;
     *) echo "Option inconnue : $1" >&2; aide 1;;
   esac
@@ -95,13 +98,20 @@ else
     *) nie "mode inconnu : $MODE (caddy ou proxy)";;
   esac
   demande ADMIN "Nom du compte d'administration" "admin"
+  if [ -z "$SOURCES" ] && [ "$NON_INTERACTIF" -eq 0 ]; then
+    . "$SOURCE/deploy/sources.sh"
+    choisis_sources "$SOURCE" SOURCES
+  fi
 fi
 
 # --------------------------------------------------------------- packages
 dit "Paquets système"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv ca-certificates curl rsync iproute2 >/dev/null
+# wireguard-tools and nftables: for the optional Mullvad tunnel, which the
+# admin page can then set up at once.
+apt-get install -y -qq python3 python3-venv ca-certificates curl rsync iproute2 \
+    wireguard-tools nftables >/dev/null
 
 # ------------------------------------------------------------------- user
 if ! id "$UTILISATEUR" >/dev/null 2>&1; then
@@ -150,6 +160,15 @@ EOF
   chown root:"$UTILISATEUR" "$ENVFILE"; chmod 640 "$ENVFILE"
   echo "MODE=$MODE" > "$CONFIG/installation"
   if [ -n "$DOMAINE" ]; then echo "DOMAINE=$DOMAINE" >> "$CONFIG/installation"; fi
+fi
+
+# ---------------------------------------------------------------- sources
+if [ -n "$SOURCES" ]; then
+  # Before the service's first start: a source left out is never asked.
+  dit "Sources interrogées"
+  runuser -u "$UTILISATEUR" -- env PYTHONPATH="$CODE/app" SATME_GP_DATA="$DONNEES" \
+      "$CODE/venv/bin/python" -m satme_gp sources --actives "$SOURCES" 2>/dev/null \
+      | sed 's/^/  /' || nie "sources inconnues : $SOURCES"
 fi
 
 # ---------------------------------------------------------------- service
@@ -314,6 +333,6 @@ echo "  Journal          : journalctl -u $APP -f"
 if [ -f "$CONFIG/mullvad.key" ]; then
   echo "  VPN Mullvad      : sortie à choisir dans l'administration (ou satme-gp-vpn sortie HOTE)"
 else
-  echo "  VPN Mullvad      : optionnel, sudo satme-gp-vpn cle FICHIER.conf (voir le README)"
+  echo "  VPN Mullvad      : optionnel, à ajouter dans l'administration (fichier de mullvad.net)"
 fi
 echo "  Mise à jour      : sudo $SOURCE/deploy/update.sh"

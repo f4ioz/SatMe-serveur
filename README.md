@@ -69,7 +69,10 @@ cd SatMe-serveur
 sudo ./deploy/install.sh
 ```
 
-Le script demande comment le serveur sera joint :
+Le script demande quelles sources interroger (toutes, toutes sauf CelesTrak,
+ou une liste : `--sources amsat,satnogs,numero` sans question ; `numero` est
+la recherche d'un satellite hors groupes chez CelesTrak). Elles se changent
+ensuite dans l'administration. Il demande aussi comment le serveur sera joint :
 
 1. **Caddy** installé sur la machine, certificat HTTPS automatique (Let's
    Encrypt). Il faut un nom de domaine qui pointe vers la machine, et les ports
@@ -106,8 +109,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/f4ioz/SatMe-serveur/main
 Questions : numéro (premier libre), nom, stockages (ceux de l'hôte sont
 listés), disque, mémoire, cœurs, pont, adresse IP (fixe conseillée) et
 passerelle, clés SSH ; accès (Caddy dans le conteneur, ou derrière votre proxy
-avec le nom de domaine et HTTPS) ; compte d'administration ; VPN Mullvad
-(fichier `.conf` sur l'hôte, sortie : pays, ville ou relais).
+avec le nom de domaine et HTTPS) ; compte d'administration ; sources
+interrogées ; VPN Mullvad (dès maintenant avec le fichier `.conf` de l'hôte,
+ou plus tard depuis l'administration).
 
 `--essai` montre ce qui serait fait sans rien toucher. Chaque réponse peut aussi
 être donnée en option (`--ctid`, `--ip`, `--mode`, `--domaine`, `--vpn-mullvad`…,
@@ -131,14 +135,19 @@ machine ne sont pas touchés.
 1. Sur mullvad.net : Compte → Configuration WireGuard → Linux, générer une clé,
    télécharger un fichier (n'importe quelle sortie : seules la clé et l'adresse
    servent). Chaque clé compte comme un appareil Mullvad.
-2. Sur la machine : `sudo satme-gp-vpn cle mullvad.conf` puis
-   `sudo satme-gp-vpn sortie fr` (pays, ville `fr-par` ou relais
-   `fr-par-wg-001` ; `satme-gp-vpn liste` montre pays et villes). À
-   l'installation : `--vpn-mullvad mullvad.conf --vpn-sortie fr` ; le tunnel est
-   alors monté avant la première récupération.
-3. Dans `/admin`, carte « VPN Mullvad » : les sorties en service, par pays et
-   ville ; « Utiliser cette sortie », « Couper le tunnel », et « Tester », qui
-   demande à Mullvad l'adresse vue d'Internet.
+2. Dans `/admin`, carte « VPN Mullvad » : envoyer ce fichier (ou coller son
+   contenu) et choisir le pays de sortie. Le serveur installe la clé, prend une
+   sortie en service dans ce pays, monte le tunnel et le teste. Le fichier
+   envoyé est effacé ; la clé n'est lisible que par root.
+3. Ensuite, dans la même carte : autre sortie (par pays et ville), « Couper le
+   tunnel », « Tester » (adresse vue d'Internet, selon Mullvad), « Retirer le
+   VPN » (tunnel retiré, clé effacée).
+
+En ligne de commande : `sudo satme-gp-vpn cle mullvad.conf` puis `sortie fr`
+(pays, ville `fr-par` ou relais `fr-par-wg-001` ; `liste` montre pays et
+villes), `arret`, `etat`, `oublie`. À l'installation : `--vpn-mullvad
+mullvad.conf --vpn-sortie fr`, le tunnel est alors monté avant la première
+récupération.
 
 Tant qu'un tunnel est choisi, rien ne sort en direct : si le tunnel tombe, les
 requêtes échouent au lieu de partir par la connexion normale. Le choix est

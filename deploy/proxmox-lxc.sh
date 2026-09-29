@@ -17,17 +17,18 @@
 #   --stockage, --stockage-modeles, --pont, --ip dhcp|ADRESSE/MASQUE,
 #   --passerelle, --memoire, --disque, --coeurs, --cle-ssh FICHIER.pub,
 #   --mode caddy|proxy, --domaine, --email, --port, --https oui|non,
-#   --admin NOM, --vpn-mullvad FICHIER.conf, --vpn-sortie fr, --oui (no confirmation)
+#   --admin NOM, --sources amsat,satnogs,numero, --vpn-mullvad FICHIER.conf,
+#   --vpn-sortie fr, --oui (no confirmation)
 
 set -euo pipefail
 
 DEPOT=https://github.com/f4ioz/SatMe-serveur
 CTID=""; NOM=""; STOCKAGE=""; MODELES=""; PONT=""; IP=""; GW=""
 MEMOIRE=""; DISQUE=""; COEURS=""; CLE_SSH="-"
-MODE=""; DOMAINE="-"; EMAIL="-"; PORT=""; HTTPS=""; ADMIN=""; VPN_CONF="-"; VPN_SORTIE=""
+MODE=""; DOMAINE="-"; EMAIL="-"; PORT=""; HTTPS=""; ADMIN=""; VPN_CONF="-"; VPN_SORTIE=""; SOURCES=""
 MISE_A_JOUR=0; ESSAI=0; OUI=0
 
-aide() { sed -n '6,21p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//'
+aide() { sed -n '6,22p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//'
          [ -n "${BASH_SOURCE[0]:-}" ] || echo "Voir $DEPOT"; exit "${1:-0}"; }
 dit()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 nie()  { printf '\033[1;31mErreur :\033[0m %s\n' "$*" >&2; exit 1; }
@@ -54,6 +55,7 @@ while [ $# -gt 0 ]; do
     --https) HTTPS="$2"; shift 2;;
     --admin) ADMIN="$2"; shift 2;;
     --vpn-mullvad) VPN_CONF="$2"; shift 2;;
+    --sources) SOURCES="$2"; shift 2;;
     --vpn-sortie) VPN_SORTIE="$2"; shift 2;;
     --mise-a-jour) MISE_A_JOUR=1; shift;;
     --essai) ESSAI=1; shift;;
@@ -195,12 +197,17 @@ while :; do
   echo "  Les deux saisies diffèrent."
 done
 
+dit "Sources de données"
+. "$SOURCE/deploy/sources.sh"
+[ -n "$SOURCES" ] || choisis_sources "$SOURCE" SOURCES
+
 dit "VPN Mullvad (optionnel, pour les requêtes du serveur vers les sources)"
+echo "  Il peut aussi être ajouté plus tard dans l'administration, en y envoyant le fichier."
 if [ "$VPN_CONF" = "-" ]; then
   VPN_CONF=""
-  if oui_non "Faire passer les requêtes du serveur par Mullvad ?" n; then
+  if oui_non "Faire passer les requêtes du serveur par Mullvad dès maintenant ?" n; then
     echo "  Fichier WireGuard généré sur mullvad.net (Compte → Configuration WireGuard → Linux)."
-    pose VPN_CONF "Chemin du fichier .conf sur cet hôte" ""
+    pose VPN_CONF "Chemin du fichier .conf sur cet hôte (vide = plus tard)" ""
   fi
 fi
 if [ -n "$VPN_CONF" ]; then
@@ -221,6 +228,7 @@ cat <<EOF
   Réseau     $PONT, $IP${GW:+ via $GW}${CLE_SSH:+, clés SSH de $CLE_SSH}
   Accès      $ACCES
   Admin      $ADMIN
+  Sources    ${SOURCES//,/, }
   VPN        $VPN
 EOF
 if [ "$OUI" -eq 0 ] && ! oui_non "Créer le conteneur ?" o; then echo "Rien n'a été fait."; exit 0; fi
@@ -265,7 +273,7 @@ pousse_code
 # The password goes through a file readable by root only, never the command line.
 fmdp="$TEMP/mdp"; ( umask 077; printf '%s\n' "$MDP" > "$fmdp" )
 fait pct push "$CTID" "$fmdp" /root/.satme-gp-mdp --perms 600
-args=(--mode "$MODE" --admin "$ADMIN" --admin-mdp-stdin --non-interactif --port "$PORT")
+args=(--mode "$MODE" --admin "$ADMIN" --admin-mdp-stdin --non-interactif --port "$PORT" --sources "$SOURCES")
 [ -n "$DOMAINE" ] && args+=(--domaine "$DOMAINE")
 if [ "$MODE" = caddy ]; then
   [ -n "$EMAIL" ] && args+=(--email "$EMAIL")
@@ -274,10 +282,16 @@ else
   args+=(--ecoute 0.0.0.0)
   [ "$HTTPS" = oui ] && args+=(--https)
 fi
-if [ -n "$VPN_CONF" ]; then
-  # A WireGuard interface in an unprivileged container needs the host's module.
-  fait modprobe wireguard || nie "module wireguard absent sur l'hôte Proxmox."
+# A WireGuard interface in an unprivileged container needs the host's module:
+# loaded in any case, so a tunnel added later from the admin page works too.
+if fait modprobe wireguard; then
   grep -qx wireguard /etc/modules 2>/dev/null || fait sh -c 'echo wireguard >> /etc/modules'
+elif [ -n "$VPN_CONF" ]; then
+  nie "module wireguard absent sur l'hôte Proxmox."
+else
+  echo "  (module wireguard absent sur l'hôte : le VPN ne pourra pas être ajouté plus tard)"
+fi
+if [ -n "$VPN_CONF" ]; then
   fait pct push "$CTID" "$VPN_CONF" /root/.satme-gp-mullvad.conf --perms 600
   args+=(--vpn-mullvad /root/.satme-gp-mullvad.conf --vpn-sortie "$VPN_SORTIE")
 fi
@@ -295,7 +309,8 @@ else
   echo "  Ensuite : https://${DOMAINE:-domaine}/  ·  https://${DOMAINE:-domaine}/admin"
   echo "  Sur le réseau local, directement : http://$ADRESSE:$PORT/"
 fi
-[ -n "$VPN_CONF" ] && echo "  VPN : sortie choisie, modifiable dans l'administration."
+if [ -n "$VPN_CONF" ]; then echo "  VPN : sortie choisie, modifiable dans l'administration."
+else echo "  VPN : à ajouter quand vous voulez dans l'administration (fichier Mullvad)."; fi
 echo "  Mot de passe root du conteneur : $MDP_ROOT  (ou : pct enter $CTID)"
 echo "  Mise à jour plus tard, depuis l'hôte :"
 echo "      bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/f4ioz/SatMe-serveur/main/deploy/proxmox-lxc.sh)\" _ --mise-a-jour --ctid $CTID"

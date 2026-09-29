@@ -198,3 +198,81 @@ def test_sortie_par_ville_ou_pays(h, monkeypatch):
     for x in ("fr-mrs", "f", "de"):
         with pytest.raises(h.Refus):
             h.trouve(x)
+
+
+# ------------------------------------------- VPN added from the admin page
+
+FICHIER = ("[Interface]\nPrivateKey = kHcuKPzZ4XVNLJ3GvUq3O1dC0ZfA2y2Z1Vt6y1fQ1Xo=\n"
+           "Address = 10.66.12.34/32,fc00:bbbb:bbbb:bb01::3:c21/128\nDNS = 10.64.0.1\n")
+
+
+def sans_cle(client, tmp_path):
+    (tmp_path / "etat.json").write_text(json.dumps({"helper": True, "cle": False}))
+
+
+def test_formulaire_d_envoi_sans_cle_avec_les_pays(client, tmp_path):
+    sans_cle(client, tmp_path)
+    page = client.get("/admin").get_data(as_text=True)
+    assert 'enctype="multipart/form-data"' in page
+    assert '<option value="fr" selected>France</option>' in page and ">Sweden<" in page
+
+
+def test_fichier_envoye_puis_cle_et_sortie_demandees(client, tmp_path, monkeypatch):
+    import io
+    sans_cle(client, tmp_path)
+    monkeypatch.setattr(vpn, "attend", lambda jeton, delai_s=20: {"jeton": jeton, "actif": True,
+                                                                  "sortie": "fr-par-wg-001"})
+    client.get("/admin")
+    j = csrf(client, "/admin")
+    client.post("/admin/vpn/cle", data={"csrf": j, "pays": "fr",
+                                        "fichier": (io.BytesIO(FICHIER.encode()), "fr-par-wg-001.conf")},
+                content_type="multipart/form-data")
+    d = client.store.dossier / "vpn"
+    assert (d / "import.conf").read_text() == FICHIER
+    assert oct((d / "import.conf").stat().st_mode & 0o777) == "0o600"
+    assert (d / "demande").read_text().split()[:2] == ["cle", "fr"]
+    assert "Mullvad fr-par-wg-001" in client.get("/admin").get_data(as_text=True)  # tested at once
+
+
+def test_contenu_colle_accepte_et_mauvais_fichier_refuse(client, tmp_path, monkeypatch):
+    sans_cle(client, tmp_path)
+    monkeypatch.setattr(vpn, "attend", lambda jeton, delai_s=20: {"jeton": jeton})
+    j = csrf(client, "/admin")
+    d = client.store.dossier / "vpn"
+    for mauvais, pays in (("[Interface]\nAddress = 10.0.0.1/32\n", "fr"), ("<html>", "fr"),
+                          (FICHIER, "zz"), (FICHIER + "#" * 5000, "fr")):
+        client.post("/admin/vpn/cle", data={"csrf": j, "pays": pays, "texte": mauvais})
+        assert not (d / "import.conf").exists()
+    client.post("/admin/vpn/cle", data={"csrf": j, "pays": "se", "texte": FICHIER})
+    assert (d / "demande").read_text().split()[:2] == ["cle", "se"]
+
+
+def test_retirer_le_vpn(client, monkeypatch):
+    monkeypatch.setattr(vpn, "attend", lambda jeton, delai_s=20: {"jeton": jeton})
+    j = csrf(client, "/admin")
+    client.post("/admin/vpn/oublie", data={"csrf": j})
+    assert (client.store.dossier / "vpn" / "demande").read_text().split()[0] == "oublie"
+
+
+def test_programme_root_lit_cle_et_oublie(h, tmp_path, monkeypatch):
+    d = tmp_path / "demande"
+    d.write_text("cle fr-par j1\n")
+    assert h.lit_demande() == ("cle", "fr-par", "j1")
+    d.write_text("oublie j2\n")
+    assert h.lit_demande() == ("oublie", "", "j2")
+    d.write_text("cle ../x j\n")
+    with pytest.raises(h.Refus):
+        h.lit_demande()
+
+
+def test_fichier_importe_lu_puis_efface_lien_refuse(h, tmp_path, monkeypatch):
+    monkeypatch.setattr(h, "IMPORT", str(tmp_path / "import.conf"))
+    (tmp_path / "import.conf").write_text(FICHIER)
+    assert "PrivateKey" in h.lit_import()
+    assert not (tmp_path / "import.conf").exists()
+    secret = tmp_path / "secret"
+    secret.write_text(FICHIER)
+    os.symlink(secret, tmp_path / "import.conf")
+    with pytest.raises(h.Refus):
+        h.lit_import()
+    assert secret.exists()  # the link is removed, never its target

@@ -6,6 +6,9 @@
     python -m satme_gp serve            the server (waitress) and the fetch loop
     python -m satme_gp admin NOM        creates or resets the admin account
     python -m satme_gp fetch            one fetch round now, printed
+    python -m satme_gp sources [--actives amsat,satnogs,numero]
+                                        which sources are asked (numero: lookups
+                                        by number upstream); shown without option
 
 Configuration by environment (the systemd unit reads /etc/satme-gp/env):
     SATME_GP_DATA    data folder                  (./data)
@@ -42,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--mot-de-passe-stdin", action="store_true",
                    help="lit le mot de passe sur l'entrée standard (scripts)")
     sous.add_parser("fetch", help="récupère maintenant les sources dues")
+    so = sous.add_parser("sources", help="sources interrogées")
+    so.add_argument("--actives", help="identifiants séparés par des virgules ; les autres sont désactivées")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -61,6 +66,22 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         store.pose_admin(args.nom, generate_password_hash(mdp))
         print(f"Compte d'administration « {args.nom} » enregistré.")
+        return 0
+
+    if args.commande == "sources":
+        if args.actives is not None:
+            voulues = {x.strip() for x in args.actives.split(",") if x.strip()}
+            connues = {s.id for s in store.sources()} | {"numero"}
+            if voulues - connues:
+                print(f"Sources inconnues : {', '.join(sorted(voulues - connues))}", file=sys.stderr)
+                return 1
+            for s in store.sources():
+                store.pose_source(s.id, s.nom, s.url, s.id in voulues, s.intervalle_min)
+            store.pose_reglage("catnr_amont", "1" if "numero" in voulues else "0")
+        for s in store.sources():
+            print(f"{'oui' if s.actif else 'non':3}  {s.id:10}  {s.nom}")
+        print(f"{'oui' if store.reglage('catnr_amont') == '1' else 'non':3}  {'numero':10}  "
+              "Recherche par numéro chez la source")
         return 0
 
     if args.commande == "fetch":

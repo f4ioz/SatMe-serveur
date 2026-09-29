@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -41,6 +42,37 @@ def demande(store: Store, ligne: str) -> str:
     # Written in place (not renamed): the path unit reacts to the file being closed.
     (d / "demande").write_text(f"{ligne} {jeton}\n")
     return jeton
+
+
+def verifie_fichier(texte: str) -> str:
+    """A WireGuard file from mullvad.net, roughly checked before the root helper
+    checks it strictly. Returns the reason it is refused, or ""."""
+    if len(texte) > 4096:
+        return "fichier trop long pour un fichier WireGuard"
+    if not re.search(r"^\s*PrivateKey\s*=\s*[A-Za-z0-9+/]{43}=\s*$", texte, re.M):
+        return "pas de PrivateKey lisible : est-ce bien le fichier WireGuard de mullvad.net ?"
+    if not re.search(r"^\s*Address\s*=", texte, re.M):
+        return "pas de ligne Address dans le fichier"
+    return ""
+
+
+def envoie_cle(store: Store, texte: str, lieu: str) -> str:
+    """Leaves the file for the root helper (which removes it) and asks for key + exit."""
+    d = store.dossier / "vpn"
+    d.mkdir(exist_ok=True)
+    f = d / "import.conf"
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as w:
+        w.write(texte)
+    return demande(store, f"cle {lieu}")
+
+
+def pays(sorties_: list[dict]) -> list[tuple[str, str]]:
+    """(code, country) of the exits, for the country choice: ("fr", "France")…"""
+    vus = {}
+    for x in sorties_:
+        vus.setdefault(x["hostname"].split("-")[0], x["pays"])
+    return sorted(vus.items(), key=lambda p: p[1])
 
 
 def attend(jeton: str, delai_s: float = 20) -> dict:

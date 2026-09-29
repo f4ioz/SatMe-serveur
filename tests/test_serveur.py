@@ -376,3 +376,28 @@ def test_requetes_celestrak_espacees(store, monkeypatch):
     fetch.tour(store, f, maintenant=1000, ecart_s=3)
     n = sum(1 for u, _ in f.appels if fetch.est_celestrak(u))
     assert n > 1 and attentes == [3] * (n - 1)
+
+
+# ------------------------------------------------ sources at installation
+
+def test_liste_des_sources_lue_par_le_script_d_installation():
+    import subprocess
+    from pathlib import Path
+    racine = Path(__file__).parent.parent
+    sortie = subprocess.run(["bash", "-c", '. deploy/sources.sh; sources_defaut .'], cwd=racine,
+                            capture_output=True, text=True, check=True).stdout.split("\n")
+    from satme_gp.store import SOURCES_DEFAUT
+    assert [ligne.split("|")[0] for ligne in sortie if ligne][:-1] == [sid for sid, _, _ in SOURCES_DEFAUT]
+    assert sortie[len(SOURCES_DEFAUT)].startswith("numero|")
+
+
+def test_commande_sources(tmp_path, monkeypatch, capsys):
+    from satme_gp.__main__ import main
+    monkeypatch.setenv("SATME_GP_DATA", str(tmp_path))
+    assert main(["sources", "--actives", "amsat,satnogs"]) == 0
+    s = Store(tmp_path)
+    assert [x.id for x in s.sources() if x.actif] == ["amsat", "satnogs"]
+    assert s.reglage("catnr_amont") == "0"
+    assert main(["sources", "--actives", "amsat,inconnue"]) == 1
+    assert main(["sources", "--actives", "amsat,numero"]) == 0
+    assert Store(tmp_path).reglage("catnr_amont") == "1"

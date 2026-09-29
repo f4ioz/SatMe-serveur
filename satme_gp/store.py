@@ -31,9 +31,9 @@ SOURCES_DEFAUT = [
     # TLE converted to OMM; every satellite SatNOGS follows, with the TLE source it trusts.
     ("satnogs", "SatNOGS DB", "https://db.satnogs.org/api/tle/?format=json"),
     # Operator ephemeris fitted by CelesTrak: often more accurate than the public GP.
-    ("supgp_iss", "CelesTrak SupGP ISS",
-     "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=iss&FORMAT=json"),
+    ("supgp_iss", "CelesTrak SupGP ISS", "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=iss&FORMAT=json"),
 ]
+# One entry per line above: deploy/sources.sh reads them (installation questions).
 
 REGLAGES_DEFAUT = {
     # Minutes between two fetches of one source (never below 120 for CelesTrak).

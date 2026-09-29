@@ -63,8 +63,23 @@
      Tant qu'un tunnel est choisi, rien ne sort en direct : s'il tombe, les requêtes échouent.
      Changer de sortie ne lève pas la pause CelesTrak.</p>
   {% if not vpn_etat.cle %}
-  <p>Pas de clé : générez un fichier WireGuard sur mullvad.net (Compte → Configuration WireGuard),
-     puis sur la machine : <code>sudo satme-gp-vpn cle mullvad.conf</code></p>
+  <p>Pas encore de VPN. Sur mullvad.net : Compte → Configuration WireGuard → Linux, générer une clé,
+     télécharger le fichier (n'importe quelle sortie). Envoyez-le ici : la clé est installée,
+     une sortie du pays choisi est prise et le tunnel est testé.</p>
+  <form method="post" action="{{ url_for('admin_vpn_cle') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="grille">
+      <div class="champ"><label>Fichier WireGuard (.conf)</label><input type="file" name="fichier" accept=".conf,text/plain"></div>
+      <div class="champ"><label>Pays de sortie</label>
+        <select name="pays">{% for code, nom in vpn_pays %}
+          <option value="{{ code }}" {% if code == 'fr' %}selected{% endif %}>{{ nom }}</option>{% endfor %}
+        </select></div>
+      <div class="champ" style="grid-column:span 2"><label>… ou son contenu collé</label>
+        <textarea name="texte" rows="4" spellcheck="false" autocomplete="off"
+                  placeholder="[Interface]&#10;PrivateKey = …&#10;Address = …"></textarea></div>
+    </div>
+    <div class="ligne"><button class="primaire" type="submit">Installer et activer le VPN</button></div>
+  </form>
   {% else %}
   <p>État :
     {% if vpn_etat.actif %}<span class="ok">tunnel par {{ vpn_etat.sortie }}</span> ({{ vpn_etat.ville }}, {{ vpn_etat.pays }}){% if vpn_etat.depuis %} depuis le {{ vpn_etat.depuis | date }}{% endif %}
@@ -87,6 +102,11 @@
       <button class="primaire" type="submit" name="action" value="sortie">Utiliser cette sortie</button>
       {% if vpn_etat.voulu %}<button type="submit" name="action" value="arret">Couper le tunnel</button>{% endif %}
     </div>
+  </form>
+  <form method="post" action="{{ url_for('admin_vpn_oublie') }}"
+        onsubmit="return confirm('Retirer le VPN et effacer la clé Mullvad de ce serveur ?')">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    <div class="ligne"><button class="danger" type="submit">Retirer le VPN</button></div>
   </form>
   <p class="sub">{{ vpn_sorties | length }} sorties en service.</p>
   {% endif %}
