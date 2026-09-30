@@ -59,6 +59,8 @@ REGLAGES_DEFAUT = {
     "satme_seul": "0",
     # Client addresses are personal data: kept this many days.
     "connexions_jours": "7",
+    # Daily totals of SatMe (versions, Android, country; no address): kept this long.
+    "satme_jours": "365",
 }
 
 
@@ -101,6 +103,9 @@ class Store:
                     quand REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS bannis (ip TEXT PRIMARY KEY, jusqua REAL NOT NULL,
                     raison TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS satme_jours (jour TEXT, cle TEXT, version TEXT NOT NULL,
+                    android TEXT NOT NULL, pays TEXT NOT NULL, n INTEGER NOT NULL,
+                    premier REAL NOT NULL, dernier REAL NOT NULL, PRIMARY KEY (jour, cle));
                 CREATE TABLE IF NOT EXISTS connexions (jour TEXT, ip TEXT, pays TEXT NOT NULL,
                     n INTEGER NOT NULL, bloques INTEGER NOT NULL, ua TEXT NOT NULL,
                     satme TEXT NOT NULL, premier REAL NOT NULL, dernier REAL NOT NULL,
@@ -286,6 +291,53 @@ class Store:
                        MAX(dernier) AS dernier, ua, satme
                 FROM connexions WHERE jour >= date('now', ?)
                 GROUP BY ip ORDER BY n DESC""", (f"-{jours - 1} day",)).fetchall()
+
+    # ---- SatMe of the day ----
+
+    def sel_du_jour(self, jour: str) -> bytes:
+        """Today's secret salt, created on first use; yesterday's is deleted."""
+        with self._verrou, self._db:
+            r = self._db.execute("SELECT valeur FROM reglages WHERE cle = 'sel_jour'").fetchone()
+            if r and r["valeur"].startswith(jour + ":"):
+                return bytes.fromhex(r["valeur"].split(":", 1)[1])
+            sel = os.urandom(16)
+            self._db.execute("INSERT OR REPLACE INTO reglages VALUES ('sel_jour', ?)", (f"{jour}:{sel.hex()}",))
+            return sel
+
+    def note_satme(self, lignes: list[tuple]) -> None:
+        """(day, daily key, version, android, country, requests, first, last)."""
+        with self._verrou, self._db:
+            self._db.executemany("""
+                INSERT INTO satme_jours VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(jour, cle) DO UPDATE SET n = n + excluded.n,
+                    premier = MIN(premier, excluded.premier), dernier = MAX(dernier, excluded.dernier)""",
+                                 lignes)
+
+    def oublie_satme(self, jours: int) -> None:
+        with self._verrou, self._db:
+            self._db.execute("DELETE FROM satme_jours WHERE jour < date('now', ?)", (f"-{jours} day",))
+
+    def satme_du_jour(self, jour: str) -> list[sqlite3.Row]:
+        with self._verrou:
+            return self._db.execute("SELECT * FROM satme_jours WHERE jour = ? ORDER BY dernier DESC",
+                                    (jour,)).fetchall()
+
+    def satme_par_jour(self, jours: int) -> dict[str, int]:
+        """SatMe seen each day (distinct within the day), over the last [jours] days."""
+        with self._verrou:
+            rows = self._db.execute("""SELECT jour, COUNT(*) AS n FROM satme_jours
+                                       WHERE jour >= date('now', ?) GROUP BY jour""",
+                                    (f"-{jours - 1} day",)).fetchall()
+        return {r["jour"]: r["n"] for r in rows}
+
+    def satme_repartition(self, champ: str, jours: int) -> list[tuple[str, int]]:
+        """SatMe-days by version, Android or country over [jours] days, most first."""
+        assert champ in ("version", "android", "pays")
+        with self._verrou:
+            rows = self._db.execute(f"""SELECT {champ} AS v, COUNT(*) AS n FROM satme_jours
+                                        WHERE jour >= date('now', ?) GROUP BY {champ} ORDER BY n DESC""",
+                                    (f"-{jours - 1} day",)).fetchall()
+        return [(r["v"], r["n"]) for r in rows]
 
     def statistiques(self, jours: int = 7) -> list[sqlite3.Row]:
         with self._verrou:

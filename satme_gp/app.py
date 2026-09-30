@@ -442,7 +442,16 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
                                derriere_proxy=derriere_proxy, version=__version__,
                                reglages={k: store.reglage(k) for k in (
                                    "nom_public", "ban_heures", "ban_refus", "ban_inconnus",
-                                   "satme_seul", "connexions_jours", "limite_requetes", "fenetre_s")})
+                                   "satme_seul", "connexions_jours", "satme_jours",
+                                   "limite_requetes", "fenetre_s")})
+
+    @app.get("/admin/satme")
+    def admin_satme():
+        r = exige_admin()
+        if r:
+            return r
+        return render_template("satme.html", s=garde.installations(), version=__version__,
+                               reglages={k: store.reglage(k) for k in ("nom_public", "satme_jours")})
 
     @app.post("/admin/bannir")
     def admin_bannir():
@@ -481,7 +490,7 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         if r:
             return r
         verifie_csrf()
-        for cle in ("ban_heures", "ban_refus", "ban_inconnus", "connexions_jours",
+        for cle in ("ban_heures", "ban_refus", "ban_inconnus", "connexions_jours", "satme_jours",
                     "limite_requetes", "fenetre_s"):
             v = request.form.get(cle, "").strip()
             if v.isdigit() and int(v) > 0:

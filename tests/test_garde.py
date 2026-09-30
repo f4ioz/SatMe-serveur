@@ -214,3 +214,60 @@ def test_derriere_un_proxy_l_adresse_du_visiteur_passe_waitress(store):
 
 def test_sans_proxy_un_faux_x_forwarded_for_est_ignore(store):
     assert servi_par_waitress(store, False, {"X-Forwarded-For": "88.1.2.3"}) == ["127.0.0.1"]
+
+
+# ------------------------------------------------------ SatMe of the day
+
+SATME_14 = {"User-Agent": "SatMe/20.73 (Android 14)"}
+SATME_15 = {"User-Agent": "SatMe/20.74 (Android 15)"}
+
+
+def test_satme_du_jour_comptes_sans_les_identifier(client, store):
+    for _ in range(3):
+        client.get("/gp/amateur.json", environ_base=DEHORS, headers=SATME_14)
+    client.get("/gp/amateur.json", environ_base={"REMOTE_ADDR": "198.51.100.7"}, headers=SATME_15)
+    client.get("/gp/amateur.json", environ_base=DEHORS, headers={"User-Agent": "curl/8"})  # not SatMe
+    s = client.garde.installations()
+    assert len(s["aujourdhui"]) == 2
+    un = next(r for r in s["aujourdhui"] if r["version"] == "20.73")
+    assert un["n"] == 3 and un["android"] == "14" and un["pays"] == "FR"
+    assert "203.0.113.9" not in str(s) and "ip" not in un          # no address anywhere
+    assert dict(s["versions"]) == {"20.73": 1, "20.74": 1}
+    assert dict(s["androids"]) == {"14": 1, "15": 1}
+    assert s["jours"][-1][1] == 2
+
+
+def test_empreinte_change_chaque_jour(store):
+    g = Garde(store, PaysFaux())
+    a = g.cle_du_jour("2026-09-30", "203.0.113.9", "SatMe/20.73 (Android 14)")
+    assert a == g.cle_du_jour("2026-09-30", "203.0.113.9", "SatMe/20.73 (Android 14)")
+    assert a == Garde(store, PaysFaux()).cle_du_jour("2026-09-30", "203.0.113.9",
+                                                     "SatMe/20.73 (Android 14)")  # restart: same day, same key
+    assert a != g.cle_du_jour("2026-10-01", "203.0.113.9", "SatMe/20.73 (Android 14)")
+    assert "2026-09-30" not in store.reglage("sel_jour")          # yesterday's salt is gone
+
+
+def test_satme_ne_envoie_rien_de_plus_et_n_est_pas_trace(client, store):
+    client.get("/gp/amateur.json", environ_base=DEHORS,
+               headers={**SATME_14, "X-SatMe-Id": "3f2b8c1e-9a4d-4e21-8b7a-0c5d6e7f8a91"})
+    client.garde.vide()
+    assert "3f2b8c1e" not in str([dict(r) for r in store.satme_du_jour(
+        __import__("time").strftime("%Y-%m-%d", __import__("time").gmtime()))])
+
+
+def test_totaux_oublies_apres_la_duree(store):
+    store.note_satme([("2000-01-01", "abc", "20.73", "14", "FR", 1, 0, 0)])
+    Garde(store, PaysFaux()).vide()
+    assert store.satme_par_jour(100000) == {}
+
+
+def test_page_satme(client):
+    client.get("/gp/amateur.json", environ_base=DEHORS, headers=SATME_14)
+    connecte(client)
+    page = client.get("/admin/satme").get_data(as_text=True)
+    assert "20.73 × 1" in page and "Android 14 × 1" in page and "🇫🇷 FR × 1" in page
+    assert "203.0.113.9" not in page
+
+
+def test_page_satme_fermee_sans_connexion(client):
+    assert client.get("/admin/satme").status_code == 302

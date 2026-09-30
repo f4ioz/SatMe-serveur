@@ -20,6 +20,7 @@ kept [connexions_jours] days, then deleted.
 from __future__ import annotations
 
 import collections
+import hashlib
 import re
 import threading
 import time
@@ -35,6 +36,7 @@ API = ("/gp/", "/gp.php", "/NORAD/")
 PIEGES = re.compile(r"(^/\.env|^/\.git|/wp-|wp-login|xmlrpc|phpmyadmin|/cgi-bin/|/vendor/phpunit"
                     r"|\.(?:asp|aspx|jsp|cgi)$|^/(?!gp\.php$|NORAD/elements/gp\.php$).*\.php$)", re.I)
 FLUSH_S = 30
+ANDROID = re.compile(r"\(Android ([0-9.]+)\)")
 
 
 def version_satme(ua: str) -> str | None:
@@ -55,6 +57,9 @@ class Garde:
         self._inconnus: dict[str, collections.deque[float]] = {}
         # (day, ip) → [requests, blocked, user agent, first, last]
         self._journal: dict[tuple[str, str], list] = {}
+        # (day, daily key) → [requests, first, last, user agent, ip]
+        self._satme: dict[tuple[str, str], list] = {}
+        self._sel: tuple[str, bytes] = ("", b"")
         self._vide_le = time.time()
 
     # ------------------------------------------------------------ bans
@@ -118,10 +123,32 @@ class Garde:
             return "réservé à l'application SatMe"
         return None
 
+    def cle_du_jour(self, jour: str, ip: str, ua: str) -> str:
+        """
+        One SatMe within one day: address and public markers, salted with a
+        secret drawn each day and thrown away the next. Tells phones apart
+        today; can never link two days, nor give the address back.
+        """
+        with self._verrou:
+            if self._sel[0] != jour:
+                self._sel = (jour, self.store.sel_du_jour(jour))
+            sel = self._sel[1]
+        return hashlib.sha256(sel + f"{ip}|{ua}".encode()).hexdigest()[:12]
+
     def note(self, ip: str, ua: str, chemin: str, statut: int, maintenant: float | None = None) -> None:
         """Counts one answered request; bans what behaves like a robot."""
         maintenant = time.time() if maintenant is None else maintenant
-        cle = (time.strftime("%Y-%m-%d", time.gmtime(maintenant)), ip)
+        jour = time.strftime("%Y-%m-%d", time.gmtime(maintenant))
+        cle = (jour, ip)
+        # A SatMe (by its User-Agent), counted for the day without identifying it.
+        if version_satme(ua) and statut < 400:
+            k = self.cle_du_jour(jour, ip, ua)
+            with self._verrou:
+                e = self._satme.get((jour, k))
+                if e is None:
+                    e = self._satme[(jour, k)] = [0, maintenant, maintenant, ua[:160], ip]
+                e[0] += 1
+                e[2] = maintenant
         with self._verrou:
             ligne = self._journal.get(cle)
             if ligne is None:
@@ -147,6 +174,7 @@ class Garde:
         maintenant = time.time() if maintenant is None else maintenant
         with self._verrou:
             journal, self._journal = self._journal, {}
+            satme, self._satme = self._satme, {}
             self._vide_le = maintenant
         lignes = []
         for (jour, ip), (n, bloques, ua, premier, dernier) in journal.items():
@@ -155,8 +183,37 @@ class Garde:
         if lignes:
             self.store.note_connexions(lignes)
         self.store.oublie_connexions(self.store.reglage_int("connexions_jours"))
+        du_jour = []
+        for (jour, k), (n, premier, dernier, ua, ip) in satme.items():
+            a = ANDROID.search(ua)
+            du_jour.append((jour, k, version_satme(ua) or "?", a.group(1) if a else "?",
+                            self.pays.de(ip)[0], n, premier, dernier))
+        if du_jour:
+            self.store.note_satme(du_jour)
+        self.store.oublie_satme(self.store.reglage_int("satme_jours"))
 
     # ------------------------------------------------------------ admin
+
+    def installations(self, maintenant: float | None = None) -> dict:
+        """What the SatMe page shows: today's SatMe, daily counts, public markers."""
+        maintenant = time.time() if maintenant is None else maintenant
+        self.vide(maintenant)
+        jour = time.strftime("%Y-%m-%d", time.gmtime(maintenant))
+        aujourdhui = [dict(r) | {"drapeau": drapeau(r["pays"])} for r in self.store.satme_du_jour(jour)]
+        par_jour = self.store.satme_par_jour(30)
+        jours = [time.strftime("%Y-%m-%d", time.gmtime(maintenant - k * 86_400)) for k in range(29, -1, -1)]
+        sept = [par_jour.get(j, 0) for j in jours[-7:]]
+        return {
+            "aujourdhui": aujourdhui,
+            "moyenne_7": round(sum(sept) / 7, 1), "max_30": max(par_jour.values(), default=0),
+            "jours": [(j, par_jour.get(j, 0)) for j in jours],
+            "max_jour": max(par_jour.values(), default=0),
+            "versions": self.store.satme_repartition("version", 30),
+            "androids": self.store.satme_repartition("android", 30),
+            "pays": [(c, n, drapeau(c)) for c, n in self.store.satme_repartition("pays", 30)],
+            # Before 20.73, "SatCombo/1.0": counted by address on the connections page.
+            "anciens": sum(1 for r in self.store.connexions(1) if r["satme"] == "≤ 20.72"),
+        }
 
     def tableau(self, jours: int) -> dict:
         """What the connections page shows, over the last [jours] days."""

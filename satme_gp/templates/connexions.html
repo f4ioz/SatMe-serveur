@@ -3,7 +3,10 @@
 {% block corps %}
 <div class="ligne" style="justify-content:space-between;margin-top:0">
   <div><h1>Connexions</h1><div class="sub">{{ reglages.nom_public }} · version {{ version }}</div></div>
-  <a class="bouton" href="{{ url_for('admin') }}">← Administration</a>
+  <div class="ligne" style="margin-top:0">
+    <a class="bouton" href="{{ url_for('admin_satme') }}">SatMe connectés</a>
+    <a class="bouton" href="{{ url_for('admin') }}">← Administration</a>
+  </div>
 </div>
 
 <div class="carte">
@@ -118,6 +121,7 @@
       <div class="champ"><label>… ou de pages inexistantes en 10 min</label><input name="ban_inconnus" value="{{ reglages.ban_inconnus }}"></div>
       <div class="champ"><label>Durée d'un bannissement (heures)</label><input name="ban_heures" value="{{ reglages.ban_heures }}"></div>
       <div class="champ"><label>Garder les connexions (jours)</label><input name="connexions_jours" value="{{ reglages.connexions_jours }}"></div>
+      <div class="champ"><label>Garder l'historique des SatMe (jours)</label><input name="satme_jours" value="{{ reglages.satme_jours }}"></div>
       <div class="champ"><label>Fichiers réservés à SatMe</label>
         <select name="satme_seul">
           <option value="0" {% if reglages.satme_seul != '1' %}selected{% endif %}>non, pour tous</option>

@@ -77,6 +77,15 @@ parmi toutes les sources actives.
   et dernière visite, bouton Bannir) ; adresses bannies (Débannir, bannir à la
   main) ; réglages du garde-fou. Un avertissement s'affiche si toutes les
   requêtes semblent venir du proxy.
+- **Page « SatMe connectés »** (`/admin/satme`) : SatMe (20.73 et suivantes)
+  n'envoie que des marqueurs publics, son nom et sa version et celle d'Android
+  (`SatMe/20.73 (Android 14)`) : ni numéro, ni indicatif. Le serveur distingue
+  les téléphones **dans la journée** par une empreinte (adresse et marqueurs)
+  salée d'un secret tiré chaque jour et effacé le lendemain : impossible de
+  relier deux jours ou de retrouver une adresse. La page montre les SatMe du
+  jour, un graphique par jour sur 30 jours, la moyenne sur 7 jours, et la
+  répartition par version de SatMe, d'Android et par pays. Seuls ces totaux
+  sont gardés (365 jours, réglable).
 - **Pays** : base gratuite *IP to Country Lite* de DB-IP (CC BY 4.0), téléchargée
   par le serveur au démarrage puis chaque mois.
 - **Données personnelles** : les adresses des clients sont gardées 7 jours par

@@ -30,6 +30,12 @@
   .chiffres div { background:#0E1720; border-radius:10px; padding:10px 12px; }
   .chiffres b { display:block; font-size:22px; color:var(--clair); }
   .defile { overflow-x:auto; }
+  .barres { display:flex; align-items:flex-end; gap:3px; height:140px; margin-top:8px; }
+  .barre { flex:1; height:100%; display:flex; flex-direction:column; justify-content:flex-end;
+           align-items:center; min-width:0; }
+  .barre span { display:block; width:100%; background:var(--cyan); border-radius:3px 3px 0 0; min-height:1px; }
+  .barre small { font-size:10px; color:var(--gris); height:14px; white-space:nowrap; }
+  .pastille { display:inline-block; background:#0E1720; border-radius:8px; padding:2px 8px; margin:2px 4px 2px 0; }
   td.nombre, th.nombre { text-align:right; font-variant-numeric:tabular-nums; }
   .primaire { background:var(--cyan); color:#06131A; border:none; }
   .danger { color:var(--rose); }

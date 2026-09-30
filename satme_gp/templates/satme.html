@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block titre %}SatMe — {{ reglages.nom_public }}{% endblock %}
+{% block corps %}
+<div class="ligne" style="justify-content:space-between;margin-top:0">
+  <div><h1>SatMe connectés</h1><div class="sub">{{ reglages.nom_public }} · version {{ version }}</div></div>
+  <div class="ligne" style="margin-top:0">
+    <a class="bouton" href="{{ url_for('admin_connexions') }}">Connexions</a>
+    <a class="bouton" href="{{ url_for('admin') }}">← Administration</a>
+  </div>
+</div>
+
+<div class="carte">
+  <div class="chiffres">
+    <div><b>{{ s.aujourdhui | length }}</b>aujourd'hui</div>
+    <div><b>{{ s.moyenne_7 }}</b>par jour, moyenne sur 7 jours</div>
+    <div><b>{{ s.max_30 }}</b>record sur 30 jours</div>
+  </div>
+  <h2 style="margin-top:16px">SatMe par jour (30 jours)</h2>
+  <div class="barres" role="img" aria-label="SatMe connectés chaque jour sur 30 jours">
+    {% for jour, n in s.jours %}
+    <div class="barre" title="{{ jour }} : {{ n }}">
+      <span style="height:{{ (100 * n / s.max_jour) | round | int if s.max_jour else 0 }}%"></span>
+      <small>{% if loop.first or loop.last or loop.index % 7 == 0 %}{{ jour[8:] }}/{{ jour[5:7] }}{% endif %}</small>
+    </div>
+    {% endfor %}
+  </div>
+  {% if s.anciens %}
+  <p class="sub" style="margin-top:10px">Plus {{ s.anciens }} adresse(s) aujourd'hui avec une version ≤ 20.72,
+     qui ne dit pas son nom de SatMe : visibles sur la page Connexions.</p>
+  {% endif %}
+</div>
+
+<div class="carte">
+  <h2>Sur 30 jours</h2>
+  <p class="sub">En SatMe-jours : un même téléphone vu trois jours compte trois fois.</p>
+  <div class="grille">
+    <div><label>Version de SatMe</label>
+      {% for v, n in s.versions %}<span class="pastille">{{ v }} × {{ n }}</span>{% else %}<span class="sub">—</span>{% endfor %}</div>
+    <div><label>Version d'Android</label>
+      {% for v, n in s.androids %}<span class="pastille">Android {{ v }} × {{ n }}</span>{% else %}<span class="sub">—</span>{% endfor %}</div>
+    <div><label>Pays</label>
+      {% for c, n, d in s.pays %}<span class="pastille">{{ d }} {{ c }} × {{ n }}</span>{% else %}<span class="sub">—</span>{% endfor %}</div>
+  </div>
+</div>
+
+<div class="carte">
+  <h2>Aujourd'hui</h2>
+  <div class="defile"><table>
+    <tr><th>SatMe</th><th>Version</th><th>Android</th><th>Pays</th><th>Première</th><th>Dernière</th><th class="nombre">Requêtes</th></tr>
+    {% for r in s.aujourdhui %}
+    <tr><td><code class="sub">{{ r.cle[:8] }}</code></td><td>{{ r.version }}</td><td>{{ r.android }}</td>
+      <td style="white-space:nowrap">{{ r.drapeau }} {{ r.pays }}</td>
+      <td style="white-space:nowrap">{{ r.premier | date }}</td><td style="white-space:nowrap">{{ r.dernier | date }}</td>
+      <td class="nombre">{{ r.n }}</td></tr>
+    {% else %}<tr><td colspan="7" class="sub">Aucun SatMe aujourd'hui pour l'instant (SatMe 20.73 et suivantes).</td></tr>{% endfor %}
+  </table></div>
+  <p class="sub">SatMe n'envoie que son nom, sa version et celle d'Android. Le serveur distingue les
+     téléphones dans la journée par une empreinte salée d'un secret changé chaque jour et effacé :
+     impossible de relier deux jours ou de retrouver une adresse. Un téléphone qui change de réseau
+     (Wi-Fi puis 4G) compte deux fois ce jour-là. Totaux gardés {{ reglages.satme_jours }} jours.</p>
+</div>
+{% endblock %}
