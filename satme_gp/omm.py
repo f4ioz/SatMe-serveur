@@ -94,18 +94,42 @@ def lit(contenu: bytes, part_minimale: float = 0.9) -> list[dict]:
     return bons
 
 
-def plus_recents(listes: list[list[dict]]) -> dict[int, dict]:
-    """Across sources, the most recent record of each satellite (by EPOCH)."""
+# Elements dated further ahead are predictions for later, not for now.
+AVANCE_MAX = timedelta(hours=1)
+
+
+def _utc_naif(e: datetime) -> datetime:
+    return e.astimezone(timezone.utc).replace(tzinfo=None) if e.tzinfo else e
+
+
+def prefere(a: dict, b: dict, maintenant: datetime) -> dict:
+    """
+    Of two records for one satellite, the one for now: the most recent EPOCH
+    not in the future. CelesTrak's SupGP gives the ISS as sixty six-hour
+    segments reaching two weeks ahead; "most recent" served the last one,
+    valid in a fortnight. When both are ahead, the nearest.
+    """
+    ea, eb = _utc_naif(epoque(a)), _utc_naif(epoque(b))
+    limite = maintenant + AVANCE_MAX
+    futur_a, futur_b = ea > limite, eb > limite
+    if futur_a != futur_b:
+        return b if futur_a else a
+    if futur_a:
+        return b if eb < ea else a
+    return b if eb > ea else a
+
+
+def plus_recents(listes: list[list[dict]], maintenant: datetime | None = None) -> dict[int, dict]:
+    """Across sources, the record of each satellite for now ([prefere])."""
+    maintenant = maintenant or datetime.now(timezone.utc).replace(tzinfo=None)
     meilleurs: dict[int, dict] = {}
     for liste in listes:
         for r in liste:
             n = norad(r)
-            e = epoque(r)
-            if n is None or e is None:
+            if n is None or epoque(r) is None:
                 continue
             deja = meilleurs.get(n)
-            if deja is None or epoque(deja) < e:
-                meilleurs[n] = r
+            meilleurs[n] = r if deja is None else prefere(deja, r, maintenant)
     return meilleurs
 
 

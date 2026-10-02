@@ -305,6 +305,19 @@ def test_base_1_0_0_recoit_les_nouvelles_sources(tmp_path):
     assert s2.source("satnogs") and s2.source("supgp_iss") and s2.source("weather") is None
 
 
+def test_un_segment_supgp_du_futur_n_est_pas_servi():
+    # SupGP: sixty six-hour segments for the ISS, the last one two weeks ahead.
+    from datetime import datetime
+    maintenant = datetime(2026, 10, 2, 18, 0)
+    seg = lambda jour, h: {"NORAD_CAT_ID": 25544, "OBJECT_NAME": f"S{jour}-{h}", "EPOCH": f"2026-10-{jour:02d}T{h:02d}:00:00"}
+    supgp = [seg(j, h) for j in range(1, 16) for h in (0, 6, 12, 18)]
+    jour = {"NORAD_CAT_ID": 25544, "OBJECT_NAME": "AMSAT", "EPOCH": "2026-10-02T00:19:52"}
+    r = omm.plus_recents([[jour], supgp], maintenant)[25544]
+    assert r["OBJECT_NAME"] == "S2-18"            # the segment for now, not "S15-18"
+    # Only future records: the nearest one.
+    assert omm.plus_recents([[seg(10, 0), seg(5, 0)]], maintenant)[25544]["OBJECT_NAME"] == "S5-0"
+
+
 def test_base_1_1_0_recoit_le_bulletin_tle_d_amsat(tmp_path):
     # A server installed with the eight sources of 1.1.0, as gp.f4ioz.fr.
     s = Store(tmp_path)
