@@ -29,6 +29,8 @@ Groupes par défaut :
   `weather`, `cubesat` (CelesTrak) ;
 - `satnogs` : tous les satellites suivis par [SatNOGS DB](https://db.satnogs.org)
   (environ 1 700), avec la source de TLE que SatNOGS retient pour chacun ;
+- `amsat_tle` : le bulletin TLE d'AMSAT, qui accompagne son bulletin JSON et
+  se trouve parfois plus frais (l'ISS du jour quand le JSON avait neuf jours) ;
 - `supgp_iss` : éléments supplémentaires (SupGP) de CelesTrak pour l'ISS,
   calculés à partir des éphémérides de l'opérateur, souvent plus justes que le
   GP public.

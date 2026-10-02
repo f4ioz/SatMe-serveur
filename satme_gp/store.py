@@ -32,6 +32,10 @@ SOURCES_DEFAUT = [
     ("satnogs", "SatNOGS DB", "https://db.satnogs.org/api/tle/?format=json"),
     # Operator ephemeris fitted by CelesTrak: often more accurate than the public GP.
     ("supgp_iss", "CelesTrak SupGP ISS", "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=iss&FORMAT=json"),
+    # AMSAT's TLE bulletin: same satellites as its JSON one, but kept fresher
+    # (ISS of 02/10 here while the JSON still had 23/09: five minutes off).
+    # Last in the list: the migration of 1.0.0 databases counts the first six.
+    ("amsat_tle", "Bulletin AMSAT (TLE)", "https://www.amsat.org/tle/current/nasabare.txt"),
 ]
 # One entry per line above: deploy/sources.sh reads them (installation questions).
 

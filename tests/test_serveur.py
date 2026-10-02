@@ -305,6 +305,23 @@ def test_base_1_0_0_recoit_les_nouvelles_sources(tmp_path):
     assert s2.source("satnogs") and s2.source("supgp_iss") and s2.source("weather") is None
 
 
+def test_base_1_1_0_recoit_le_bulletin_tle_d_amsat(tmp_path):
+    # A server installed with the eight sources of 1.1.0, as gp.f4ioz.fr.
+    s = Store(tmp_path)
+    s.supprime_source("amsat_tle")
+    s._db.execute("UPDATE reglages SET valeur = ? WHERE cle = 'sources_proposees'",
+                  ("amsat,amateur,stations,visual,weather,cubesat,satnogs,supgp_iss",))
+    s._db.commit()
+    assert Store(tmp_path).source("amsat_tle").url.endswith("nasabare.txt")
+
+
+def test_le_bulletin_tle_d_amsat_se_lit(tmp_path):
+    texte = ("ISS\n1 25544U 98067A   26275.01380287  .00003738  00000-0  76743-4 0  9993\n"
+             "2 25544  51.6312 131.4121 0006946 211.9293 148.1275 15.48707684588318\n")
+    r = omm.lit_source(texte.encode(), part_minimale=0.5)
+    assert r[0]["NORAD_CAT_ID"] == 25544 and r[0]["EPOCH"].startswith("2026-10-02")
+
+
 # ------------------------------------------------- CelesTrak politeness
 
 def test_rafraichir_ne_force_pas_celestrak(client, store):
