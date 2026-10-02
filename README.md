@@ -35,8 +35,10 @@ Groupes par défaut :
   calculés à partir des éphémérides de l'opérateur, souvent plus justes que le
   GP public.
 
-La recherche par numéro prend, pour chaque satellite, l'élément le plus récent
-parmi toutes les sources actives.
+La recherche par numéro prend, pour chaque satellite, l'élément **du moment**
+parmi toutes les sources actives : l'époque la plus récente qui n'est pas plus
+d'une heure dans le futur (le SupGP de l'ISS publie des segments de prévision
+jusqu'à deux semaines en avance), sinon la plus proche.
 
 - **Trois formats de source**, reconnus seuls : OMM JSON (CelesTrak, SupGP,
   AMSAT), JSON TLE de SatNOGS DB, et TLE texte (avec ou sans ligne de nom). Les
