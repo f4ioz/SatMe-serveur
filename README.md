@@ -74,6 +74,15 @@ jusqu'à deux semaines en avance), sinon la plus proche.
 - **Option « réservé à SatMe »** : les fichiers d'éléments seulement pour
   l'application (reconnue à son `User-Agent`, `SatMe/20.73 (Android 14)`) ; elle
   écarte les robots ordinaires, pas un imitateur.
+- **Accès autorisés** (page « Connexions ») : exceptions à « réservé à SatMe »
+  pour un client connu, un site web par exemple. Une règle porte un nom, un
+  début de `User-Agent`, une adresse ou un réseau (IPv4 ou IPv6, `192.168.0.0/24`),
+  ou les deux — **avec les deux, il faut les deux** —, et une note. Un
+  `User-Agent` seul s'imite : mieux vaut y joindre l'adresse. L'exception ne lève
+  que le contrôle « SatMe seulement » : la limite de requêtes s'applique
+  toujours, et le client peut être banni comme les autres, sauf si la règle dit
+  « jamais banni » (adresse obligatoire alors : les bannissements sont par
+  adresse). Exemple : « Site F4IOZ », `f4ioz-site/` et `78.198.73.87`.
 - **Waitress** : 200 connexions simultanées au plus, 30 s d'inactivité.
 - **Page « Connexions »** (`/admin/connexions`) : sur 24 h, 7 ou 30 jours,
   requêtes, adresses, part de SatMe, refus ; par pays (drapeau, nom) ; par
