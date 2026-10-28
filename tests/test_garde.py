@@ -271,3 +271,112 @@ def test_page_satme(client):
 
 def test_page_satme_fermee_sans_connexion(client):
     assert client.get("/admin/satme").status_code == 302
+
+
+# ---------------------------------------------------- access exceptions
+
+SITE = {"User-Agent": "f4ioz-site/1.0 (+https://f4ioz.fr)"}
+SITE_IP = {"REMOTE_ADDR": "78.198.73.87"}
+
+
+def regle(store, **r):
+    store.pose_acces_autorises(store.acces_autorises() + [{"id": f"r{len(store.acces_autorises())}",
+                                                           "nom": "essai", "ua": "", "ip": "",
+                                                           "note": "", "jamais_banni": False} | r])
+
+
+def test_correspondance_des_regles():
+    from satme_gp.garde import correspond
+    assert correspond({"ua": "f4ioz-site/"}, "203.0.113.1", "f4ioz-site/1.0 (+https://f4ioz.fr)")
+    assert not correspond({"ua": "f4ioz-site/"}, "203.0.113.1", "curl/8 f4ioz-site/")
+    assert correspond({"ip": "192.168.0.0/24"}, "192.168.0.211", "")
+    assert not correspond({"ip": "192.168.0.0/24"}, "192.168.1.211", "")
+    assert correspond({"ip": "78.198.73.87"}, "::ffff:78.198.73.87", "")       # IPv4 seen as IPv6
+    assert correspond({"ip": "2001:db8::/32"}, "2001:db8::5", "")
+    assert not correspond({"ip": "2001:db8::/32"}, "203.0.113.1", "")
+    deux = {"ua": "f4ioz-site/", "ip": "78.198.73.87"}
+    assert correspond(deux, "78.198.73.87", SITE["User-Agent"])
+    assert not correspond(deux, "203.0.113.1", SITE["User-Agent"])         # right UA, wrong address
+    assert not correspond(deux, "78.198.73.87", "curl/8")                  # right address, wrong UA
+    assert not correspond({"ua": "", "ip": ""}, "78.198.73.87", "x")       # an empty rule matches nothing
+
+
+def test_regles_verifiees():
+    from satme_gp.garde import verifie_regle
+    assert verifie_regle("Site", "f4ioz-site/", "78.198.73.87", True) is None
+    assert verifie_regle("Site", "", "", False)
+    assert verifie_regle("", "f4ioz-site/", "", False)
+    assert verifie_regle("Site", "", "pas-une-adresse", False)
+    assert verifie_regle("Site", "", "0.0.0.0/0", False)
+    assert verifie_regle("Site", "f4ioz-site/", "", True)                  # never banned needs an address
+
+
+def test_exception_passe_satme_seul(client, store):
+    store.pose_reglage("satme_seul", "1")
+    regle(store, ua="f4ioz-site/", ip="78.198.73.87")
+    assert client.get("/gp/amateur.json", environ_base=SITE_IP, headers=SITE).status_code == 200
+    assert client.get("/gp.php?CATNR=1&FORMAT=json", environ_base=SITE_IP, headers=SITE).status_code == 200
+    # Both are required: the same UA from elsewhere, or another client from that address, refused.
+    assert client.get("/gp/amateur.json", environ_base=DEHORS, headers=SITE).status_code == 403
+    assert client.get("/gp/amateur.json", environ_base=SITE_IP,
+                      headers={"User-Agent": "curl/8"}).status_code == 403
+
+
+def test_exception_par_reseau_ou_par_ua(client, store):
+    store.pose_reglage("satme_seul", "1")
+    regle(store, ip="192.168.0.0/24")
+    regle(store, ua="f4ioz-site/")
+    assert client.get("/gp/amateur.json", environ_base={"REMOTE_ADDR": "192.168.0.211"}).status_code == 200
+    assert client.get("/gp/amateur.json", environ_base=DEHORS, headers=SITE).status_code == 200
+    assert client.get("/gp/amateur.json", environ_base=DEHORS,
+                      headers={"User-Agent": "python-requests/2.31"}).status_code == 403
+
+
+def test_exception_n_echappe_pas_au_ban_ni_a_la_limite(client, store):
+    store.pose_reglage("satme_seul", "1")
+    regle(store, ua="f4ioz-site/", ip="78.198.73.87")
+    client.garde.bannit("78.198.73.87", "essai", 3600)
+    assert client.get("/gp/amateur.json", environ_base=SITE_IP, headers=SITE).status_code == 403
+    client.garde.debannit("78.198.73.87")
+    store.pose_reglage("limite_requetes", "2")
+    codes = [client.get("/gp/amateur.json", environ_base=SITE_IP, headers=SITE).status_code
+             for _ in range(3)]
+    assert codes == [200, 200, 429]
+
+
+def test_jamais_banni(client, store):
+    store.pose_reglage("limite_requetes", "1")
+    regle(store, ua="f4ioz-site/", ip="78.198.73.87", jamais_banni=True)
+    for _ in range(6):
+        client.get("/gp/amateur.json", environ_base=SITE_IP, headers=SITE)
+    client.get("/.env", environ_base=SITE_IP, headers=SITE)
+    assert client.garde.liste_bannis() == []
+    # Another client from that same address is banned; the site still passes the ban.
+    client.get("/.env", environ_base=SITE_IP, headers={"User-Agent": "curl/8"})
+    assert [b[0] for b in client.garde.liste_bannis()] == ["78.198.73.87"]
+    assert client.get("/", environ_base=SITE_IP, headers={"User-Agent": "curl/8"}).status_code == 403
+    assert client.get("/", environ_base=SITE_IP, headers=SITE).status_code == 200
+
+
+def test_acces_autorises_depuis_la_page_et_gardes(client, store, tmp_path):
+    connecte(client)
+    j = csrf(client, "/admin/connexions")
+    assert client.post("/admin/acces", data={"nom": "x", "ua": "abc"}).status_code == 400   # no CSRF
+    client.post("/admin/acces", data={"csrf": j, "nom": "Site F4IOZ", "ua": "f4ioz-site/",
+                                      "ip": "78.198.73.87", "note": "site web", "jamais_banni": "0"})
+    client.post("/admin/acces", data={"csrf": j, "nom": "Mauvaise", "ua": "", "ip": "nimporte"})
+    regles = Store(tmp_path).acces_autorises()                     # persisted: a fresh Store sees it
+    assert [(a["nom"], a["ua"], a["ip"]) for a in regles] == [("Site F4IOZ", "f4ioz-site/", "78.198.73.87/32")]
+    rid = regles[0]["id"]
+    page = client.get(f"/admin/connexions?modifier={rid}").get_data(as_text=True)
+    assert "Accès autorisés" in page and "Modifier « Site F4IOZ »" in page
+    client.post("/admin/acces", data={"csrf": j, "id": rid, "nom": "Site F4IOZ", "ua": "f4ioz-site/",
+                                      "ip": "192.168.0.0/24", "jamais_banni": "1"})
+    assert [(a["ip"], a["jamais_banni"]) for a in store.acces_autorises()] == [("192.168.0.0/24", True)]
+    client.post(f"/admin/acces/{rid}/supprime", data={"csrf": j})
+    assert store.acces_autorises() == []
+
+
+def test_acces_fermes_sans_connexion(client, store):
+    assert client.post("/admin/acces", data={"nom": "x", "ua": "abc"}).status_code == 302
+    assert store.acces_autorises() == []

@@ -70,7 +70,8 @@
       <td><code>{{ r.ip }}</code>{% if r.ip == moi %} <span class="sub">(vous)</span>{% endif %}</td>
       <td style="white-space:nowrap">{{ r.drapeau }} {{ r.pays }}</td>
       <td>{% if r.satme %}<span class="ok">SatMe {{ r.satme }}</span>
-          {% else %}<span class="ambre">autre</span> <span class="sub">{{ r.ua[:70] or "sans User-Agent" }}</span>{% endif %}</td>
+          {% else %}<span class="ambre">autre</span> <span class="sub">{{ r.ua[:70] or "sans User-Agent" }}</span>{% endif %}
+          {% if r.acces %} <span class="ok">autorisé : {{ r.acces }}</span>{% endif %}</td>
       <td class="nombre">{{ r.n }}</td><td class="nombre">{% if r.bloques %}<span class="ko">{{ r.bloques }}</span>{% else %}0{% endif %}</td>
       <td style="white-space:nowrap">{{ r.premier | date }}</td><td style="white-space:nowrap">{{ r.dernier | date }}</td>
       <td>{% if r.ip != moi %}
@@ -131,6 +132,50 @@
     <p class="sub">« SatMe seulement » s'appuie sur l'en-tête User-Agent : il écarte les robots
        ordinaires, pas quelqu'un qui imite SatMe.</p>
     <div class="ligne"><button class="primaire" type="submit">Enregistrer</button></div>
+  </form>
+</div>
+
+<div class="carte" id="acces">
+  <h2>Accès autorisés</h2>
+  <p class="sub">Clients qui ne sont pas SatMe mais peuvent lire les fichiers d'éléments quand ils
+     sont réservés à SatMe (le site f4ioz.fr par exemple). Une règle donne un début de
+     User-Agent, une adresse ou un réseau (<code>78.198.73.87</code>, <code>192.168.0.0/24</code>,
+     IPv4 ou IPv6), ou les deux : <b>avec les deux, il faut les deux</b>. Un User-Agent seul
+     s'imite facilement : n'importe quel robot peut l'envoyer ; l'adresse est la vraie preuve.
+     La limite de requêtes s'applique toujours. Un client autorisé peut être banni comme les
+     autres, sauf si la règle dit « jamais banni » (adresse obligatoire alors).</p>
+  <div class="defile"><table>
+    <tr><th>Nom</th><th>Début de User-Agent</th><th>Adresse ou réseau</th><th>Jamais banni</th><th>Note</th><th></th></tr>
+    {% for a in acces %}
+    <tr><td>{{ a.nom }}</td>
+      <td>{% if a.ua %}<code>{{ a.ua }}</code>{% else %}<span class="sub">tous</span>{% endif %}</td>
+      <td>{% if a.ip %}<code>{{ a.ip }}</code>{% else %}<span class="sub">toutes</span>{% endif %}</td>
+      <td>{{ 'oui' if a.jamais_banni else 'non' }}</td>
+      <td class="sub">{{ a.note }}</td>
+      <td style="white-space:nowrap"><a class="bouton" href="{{ url_for('admin_connexions', jours=jours, modifier=a.id) }}#acces">Modifier</a>
+        <form method="post" action="{{ url_for('admin_acces_supprime', rid=a.id) }}" style="display:inline"
+              onsubmit="return confirm('Supprimer cette règle ?')">
+          <input type="hidden" name="csrf" value="{{ csrf() }}">
+          <button class="danger" type="submit">Supprimer</button></form></td></tr>
+    {% else %}<tr><td colspan="6" class="sub">Aucune.</td></tr>{% endfor %}
+  </table></div>
+  <form method="post" action="{{ url_for('admin_acces') }}">
+    <input type="hidden" name="csrf" value="{{ csrf() }}">
+    {% if modifie %}<input type="hidden" name="id" value="{{ modifie.id }}">{% endif %}
+    <h2 style="margin-top:14px">{{ "Modifier « " ~ modifie.nom ~ " »" if modifie else "Ajouter une règle" }}</h2>
+    <div class="grille">
+      <div class="champ"><label>Nom</label><input name="nom" value="{{ modifie.nom if modifie else '' }}" placeholder="Site F4IOZ" required></div>
+      <div class="champ"><label>Début de User-Agent (vide = tous)</label><input name="ua" value="{{ modifie.ua if modifie else '' }}" placeholder="f4ioz-site/"></div>
+      <div class="champ"><label>Adresse ou réseau (vide = toutes)</label><input name="ip" value="{{ modifie.ip if modifie else '' }}" placeholder="78.198.73.87 ou 192.168.0.0/24"></div>
+      <div class="champ"><label>Note</label><input name="note" value="{{ modifie.note if modifie else '' }}"></div>
+      <div class="champ"><label>Jamais banni</label>
+        <select name="jamais_banni">
+          <option value="0" {% if not (modifie and modifie.jamais_banni) %}selected{% endif %}>non</option>
+          <option value="1" {% if modifie and modifie.jamais_banni %}selected{% endif %}>oui (adresse obligatoire)</option>
+        </select></div>
+    </div>
+    <div class="ligne"><button class="primaire" type="submit">Enregistrer</button>
+      {% if modifie %}<a class="bouton" href="{{ url_for('admin_connexions', jours=jours) }}#acces">Annuler</a>{% endif %}</div>
   </form>
 </div>
 {% endblock %}

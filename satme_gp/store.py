@@ -157,6 +157,19 @@ class Store:
         with self._verrou, self._db:
             self._db.execute("INSERT OR REPLACE INTO reglages VALUES (?, ?)", (cle, valeur))
 
+    # ---- access exceptions ----
+
+    def acces_autorises(self) -> list[dict]:
+        """The « Accès autorisés » rules: [{id, nom, ua, ip, note, jamais_banni}]."""
+        try:
+            regles = json.loads(self.reglage("acces_autorises") or "[]")
+        except ValueError:
+            return []
+        return [r for r in regles if isinstance(r, dict) and r.get("id")]
+
+    def pose_acces_autorises(self, regles: list[dict]) -> None:
+        self.pose_reglage("acces_autorises", json.dumps(regles, ensure_ascii=False))
+
     # ---- sources ----
 
     def sources(self) -> list[Source]:

@@ -12,6 +12,14 @@ Addresses of the local network are never banned automatically: behind a
 proxy that does not pass X-Forwarded-For, every visitor has the proxy's
 address, and banning it would shut everyone out.
 
+Access exceptions (« Accès autorisés »): a known client that is not SatMe,
+the owner's website for instance, may still read the element files when they
+are kept for SatMe. A rule names a User-Agent prefix, an address or network,
+or both; with both, both must match. A User-Agent alone is easily imitated:
+the address is the real proof. An exception lifts only the « SatMe only »
+check: bans still apply unless the rule says « jamais banni » (which needs an
+address, since bans are by address), and the rate limit always applies.
+
 Connections are counted in memory and written every half minute: a flood
 must not become a flood of database writes. Addresses are personal data:
 kept [connexions_jours] days, then deleted.
@@ -21,6 +29,7 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import ipaddress
 import re
 import threading
 import time
@@ -45,6 +54,56 @@ def version_satme(ua: str) -> str | None:
     if not m:
         return None
     return m.group(2) if m.group(1) == "SatMe" else "≤ 20.72"
+
+
+def reseau(texte: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+    """An address or a CIDR network ("78.198.73.87", "192.168.0.0/24", "2001:db8::/32")."""
+    return ipaddress.ip_network(texte.strip(), strict=False)
+
+
+def verifie_regle(nom: str, ua: str, ip: str, jamais_banni: bool) -> str | None:
+    """Why this exception cannot be saved, or None."""
+    if not nom.strip():
+        return "donnez un nom à la règle"
+    if not ua and not ip:
+        return "indiquez un début de User-Agent, une adresse, ou les deux"
+    if ua and len(ua) < 3:
+        return "début de User-Agent trop court (3 caractères au moins)"
+    if ip:
+        try:
+            n = reseau(ip)
+        except ValueError:
+            return f"adresse ou réseau invalide : {ip}"
+        if n.prefixlen == 0:
+            return "un réseau qui couvre tout Internet n'est pas une exception"
+    if jamais_banni and not ip:
+        return "« jamais banni » demande une adresse : un User-Agent seul s'imite"
+    return None
+
+
+def _adresse(ip: str):
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    return a.ipv4_mapped if a.version == 6 and a.ipv4_mapped else a
+
+
+def correspond(regle: dict, ip: str, ua: str) -> bool:
+    """True when [ip, ua] match [regle]: every criterion given must match."""
+    prefixe, net = regle.get("ua") or "", regle.get("ip") or ""
+    if not prefixe and not net:
+        return False
+    if prefixe and not (ua or "").startswith(prefixe):
+        return False
+    if net:
+        a = _adresse(ip)
+        try:
+            if a is None or a not in reseau(net):
+                return False
+        except ValueError:
+            return False
+    return True
 
 
 class Garde:
@@ -110,16 +169,24 @@ class Garde:
                 del table[k]
         return len(q)
 
+    # ------------------------------------------------ access exceptions
+
+    def acces(self, ip: str, ua: str) -> dict | None:
+        """The first « Accès autorisés » rule this client matches, or None."""
+        if not self.store.reglage("acces_autorises"):
+            return None
+        return next((r for r in self.store.acces_autorises() if correspond(r, ip, ua)), None)
+
     # -------------------------------------------------------- requests
 
     def refuse(self, ip: str, ua: str, chemin: str, maintenant: float | None = None) -> str | None:
         """Why this request is refused before anything else, or None."""
         maintenant = time.time() if maintenant is None else maintenant
         b = self.banni(ip, maintenant)
-        if b:
+        if b and not (self.acces(ip, ua) or {}).get("jamais_banni"):
             return f"adresse bannie jusqu'au {time.strftime('%d/%m %H:%M', time.gmtime(b[0]))} UTC"
         if (self.store.reglage("satme_seul") == "1" and chemin.startswith(("/gp", "/NORAD"))
-                and version_satme(ua) is None):
+                and version_satme(ua) is None and self.acces(ip, ua) is None):
             return "réservé à l'application SatMe"
         return None
 
@@ -160,7 +227,9 @@ class Garde:
             n429 = self._compte(self._refus, ip, maintenant, 3600) if statut == 429 else 0
             n404 = (self._compte(self._inconnus, ip, maintenant, 600)
                     if statut == 404 and not chemin.startswith(API) else 0)
-        if statut == 404 and PIEGES.search(chemin):
+        if (statut == 404 or n429 or n404) and (self.acces(ip, ua) or {}).get("jamais_banni"):
+            pass                                  # an exception that is never banned
+        elif statut == 404 and PIEGES.search(chemin):
             self.bannit(ip, f"sonde {chemin[:60]}", maintenant=maintenant)
         elif n429 >= self.store.reglage_int("ban_refus"):
             self.bannit(ip, f"{n429} refus pour excès en une heure", maintenant=maintenant)
@@ -219,6 +288,7 @@ class Garde:
         """What the connections page shows, over the last [jours] days."""
         self.vide()
         par_ip = self.store.connexions(jours)
+        regles = self.store.acces_autorises()
         noms: dict[str, str] = {}
         pays: dict[str, dict] = {}
         for r in par_ip:
@@ -234,7 +304,8 @@ class Garde:
         total = sum(r["n"] for r in par_ip)
         tous_prives = bool(par_ip) and all(privee(r["ip"]) for r in par_ip)
         return {
-            "ips": [dict(r) | {"drapeau": drapeau(r["pays"]), "nom_pays": noms.get(r["pays"], "?")}
+            "ips": [dict(r) | {"drapeau": drapeau(r["pays"]), "nom_pays": noms.get(r["pays"], "?"),
+                               "acces": next((a["nom"] for a in regles if correspond(a, r["ip"], r["ua"])), None)}
                     for r in par_ip[:300]],
             "pays": sorted(pays.values(), key=lambda p: -p["n"]),
             "total": total, "nb_ips": len(par_ip),

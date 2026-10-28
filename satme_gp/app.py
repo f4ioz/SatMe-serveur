@@ -28,7 +28,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from . import __version__
 from . import vpn
 from .fetch import Amont, celestrak_en_pause, est_celestrak, intervalle_min
-from .garde import Garde
+from .garde import Garde, reseau, verifie_regle
 from .limite import Limiteur
 from .pays import ATTRIBUTION, privee
 from .store import Store
@@ -438,6 +438,9 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         return render_template("connexions.html", t=garde.tableau(jours), jours=jours,
                                diag=diagnostic_proxy(),
                                bannis=garde.liste_bannis(), moi=client()[0],
+                               acces=store.acces_autorises(),
+                               modifie=next((a for a in store.acces_autorises()
+                                             if a["id"] == request.args.get("modifier")), None),
                                base_pays=garde.pays.a_jour(), attribution=ATTRIBUTION,
                                derriere_proxy=derriere_proxy, version=__version__,
                                reglages={k: store.reglage(k) for k in (
@@ -483,6 +486,43 @@ def cree_app(store: Store, amont: Amont | None = None, *, secret: str,
         garde.debannit(request.form.get("ip", "").strip())
         flash("Adresse débannie.")
         return redirect(url_for("admin_connexions", jours=request.form.get("jours", "1")))
+
+    @app.post("/admin/acces")
+    def admin_acces():
+        """Adds or changes an « Accès autorisés » rule."""
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        f = request.form
+        nom, ua, ip = (f.get(k, "").strip()[:200] for k in ("nom", "ua", "ip"))
+        jamais = f.get("jamais_banni") == "1"
+        pourquoi = verifie_regle(nom, ua, ip, jamais)
+        if pourquoi:
+            flash(f"Accès autorisé non enregistré : {pourquoi}.")
+            return redirect(url_for("admin_connexions") + "#acces")
+        regle = {"id": f.get("id") or secrets.token_hex(6), "nom": nom, "ua": ua,
+                 "ip": str(reseau(ip)) if ip else "", "note": f.get("note", "").strip()[:500],
+                 "jamais_banni": jamais}
+        regles = store.acces_autorises()
+        i = next((k for k, a in enumerate(regles) if a["id"] == regle["id"]), None)
+        if i is None:
+            regles.append(regle)
+        else:
+            regles[i] = regle
+        store.pose_acces_autorises(regles)
+        flash(f"Accès autorisé « {nom} » enregistré.")
+        return redirect(url_for("admin_connexions") + "#acces")
+
+    @app.post("/admin/acces/<rid>/supprime")
+    def admin_acces_supprime(rid: str):
+        r = exige_admin()
+        if r:
+            return r
+        verifie_csrf()
+        store.pose_acces_autorises([a for a in store.acces_autorises() if a["id"] != rid])
+        flash("Accès autorisé supprimé.")
+        return redirect(url_for("admin_connexions") + "#acces")
 
     @app.post("/admin/garde")
     def admin_garde():
